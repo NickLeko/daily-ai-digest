@@ -9,15 +9,15 @@ Ingests real-world signals from GitHub, healthcare news, and FDA regulatory data
 ## 🚀 What it does
 
 ### Ingestion
-- GitHub trending repositories (AI / agents / RAG / healthcare-relevant)
-- Healthcare news via RSS feeds
-- FDA enforcement + recall data via openFDA
+- **GitHub trending repositories:** (AI / agents / RAG / healthcare-relevant)
+- **Healthcare news:** via RSS feeds
+- **FDA enforcement + recall data:** via openFDA
 
 ### Processing
-- LLM-based summarization (2-sentence summaries)
-- Action-oriented "Why it matters" insights
-- Signal scoring (HIGH / MEDIUM / LOW)
-- Cross-source synthesis → Top Insight
+- **LLM-based summarization:** (2-sentence summaries)
+- **Action-oriented "Why it matters" insights**
+- **Signal scoring:** (HIGH / MEDIUM / LOW)
+- **Cross-source synthesis:** → Top Insight
 
 ### Output
 - Clean HTML digest
@@ -44,41 +44,49 @@ Includes:
 
 Create a `.env` file:
 
-    OPENAI_API_KEY=
-    GMAIL_ADDRESS=
-    GMAIL_APP_PASSWORD=
-    TO_EMAIL=
-    GITHUB_TOKEN= (optional)
+```env
+OPENAI_API_KEY=your_key_here
+GMAIL_ADDRESS=your_email@gmail.com
+GMAIL_APP_PASSWORD=your_app_password
+TO_EMAIL=recipient@email.com
+GITHUB_TOKEN=your_token_here (optional)
+```
 
 ---
 
 ### 2. Install dependencies
 
 ```bash
-pip install -r requirements.txt```
-
-
+pip install -r requirements.txt
+```
 
 ### 3. Run the pipeline
 
 ```bash
 python main.py
+```
+
+---
 
 ## ⚙️ Tech Stack
 
-- Python
-- OpenAI API (LLM summarization + synthesis)
-- GitHub REST API
-- RSS feeds (healthcare news)
-- openFDA API (regulatory data)
-- launchd (MacOS scheduling)
+- **Python**
+- **OpenAI API:** (LLM summarization + synthesis)
+- **GitHub REST API**
+- **RSS feeds:** (healthcare news)
+- **openFDA API:** (regulatory data)
+- **launchd:** (MacOS scheduling)
+
+---
 
 ## 🎯 Purpose
 
 Built as a personal intelligence system to:
-- Track high-signal developments in healthcare AI
-- Prioritize what actually matters for product decisions
-- Reduce noise from generic AI/news feeds
+- Track high-signal developments in healthcare AI.
+- Prioritize what actually matters for product decisions.
+- Reduce noise from generic AI/news feeds.
+
+---
 
 ## 📌 Key Features
 
@@ -92,19 +100,17 @@ Built as a personal intelligence system to:
 
 ## 🧭 Why this matters
 
-Healthcare AI is shifting from experimentation to operational deployment.
+Healthcare AI is shifting from experimentation to operational deployment. This system focuses on:
+- **Reliability**
+- **Workflow ROI**
+- **Regulatory awareness**
 
-This system focuses on:
-- reliability
-- workflow ROI
-- regulatory awareness
-
-Not just model capability.
+It prioritizes clinical and operational utility over model capability alone.
 
 ---
 
 ## 📎 Notes
 
-- `.env` is excluded from version control
-- Logs saved locally (`log.txt`, `error.txt`)
-- Designed for extensibility (new sources, filters, scoring)
+- `.env` is excluded from version control.
+- Logs are saved locally in `log.txt` and `error.txt`.
+- Designed for extensibility (add new sources, filters, or scoring logic easily).
