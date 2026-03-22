@@ -1,0 +1,7 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+log.txt
+error.txt
+latest_digest.html
