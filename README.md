@@ -24,6 +24,8 @@ Ingests real-world signals from GitHub, healthcare news, and FDA regulatory data
 - Email delivery
 - Daily automated run (7:00 AM via `launchd`)
 - Local artifact saved (`latest_digest.html`)
+- Duplicate-send protection for same-day reruns
+- Item history to avoid recycling the same stories and repos
 
 ---
 
@@ -50,6 +52,7 @@ GMAIL_ADDRESS=your_email@gmail.com
 GMAIL_APP_PASSWORD=your_app_password
 TO_EMAIL=recipient@email.com
 GITHUB_TOKEN=your_token_here (optional)
+LOCAL_TIMEZONE=America/Los_Angeles
 ```
 
 ---
@@ -65,6 +68,10 @@ pip install -r requirements.txt
 ```bash
 python main.py
 ```
+
+State is stored in `data/state/digest_state.json` so the app can:
+- skip a second send if the job runs again on the same local day
+- prefer items that were not already sent in recent digests
 
 ---
 
@@ -113,4 +120,5 @@ It prioritizes clinical and operational utility over model capability alone.
 
 - `.env` is excluded from version control.
 - Logs are saved locally in `log.txt` and `error.txt`.
+- If you use `launchd`, disable the scheduled GitHub Action or vice versa so you only have one scheduler.
 - Designed for extensibility (add new sources, filters, or scoring logic easily).

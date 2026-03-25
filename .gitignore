@@ -5,3 +5,4 @@ __pycache__/
 log.txt
 error.txt
 latest_digest.html
+data/state/

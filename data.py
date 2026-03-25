@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
@@ -7,6 +8,7 @@ import feedparser
 import requests
 
 from config import GITHUB_TOKEN, MAX_ITEMS_PER_CATEGORY, NEWS_FEED_URLS
+from state import get_sent_item_keys
 
 
 DigestItem = Dict[str, str]
@@ -34,6 +36,23 @@ REPO_RELEVANT_KEYWORDS = [
     "workflow",
 ]
 
+REPO_EXCLUDED_KEYWORDS = [
+    "banlist",
+    "blockchain",
+    "coin",
+    "crypto",
+    "defi",
+    "game",
+    "gaming",
+    "market",
+    "monero",
+    "nft",
+    "token",
+    "trading",
+    "wallet",
+    "web3",
+]
+
 
 def iso_days_ago(days: int) -> str:
     dt = datetime.now(timezone.utc) - timedelta(days=days)
@@ -45,9 +64,29 @@ def truncate(text: str, max_len: int = 1200) -> str:
     return text[:max_len]
 
 
+def item_key(category: str, title: str, url: str) -> str:
+    normalized_title = (title or "").strip().lower()
+    normalized_url = (url or "").strip().lower()
+    return f"{category.lower()}::{normalized_title}::{normalized_url}"
+
+
+def prioritize_unseen(items: List[DigestItem], sent_item_keys: set[str]) -> List[DigestItem]:
+    unseen = [item for item in items if item.get("item_key", "") not in sent_item_keys]
+    seen = [item for item in items if item.get("item_key", "") in sent_item_keys]
+    return unseen + seen
+
+
 def repo_is_relevant(name: str, description: str) -> bool:
     haystack = f"{name} {description}".lower()
-    return any(keyword in haystack for keyword in REPO_RELEVANT_KEYWORDS)
+    tokens = set(re.findall(r"[a-z0-9]+", haystack))
+
+    if any(keyword in tokens for keyword in REPO_EXCLUDED_KEYWORDS):
+        return False
+
+    if not description.strip():
+        return False
+
+    return any(keyword in tokens for keyword in REPO_RELEVANT_KEYWORDS)
 
 
 def fetch_github_repos() -> List[DigestItem]:
@@ -58,17 +97,18 @@ def fetch_github_repos() -> List[DigestItem]:
     if GITHUB_TOKEN:
         headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
 
-    created_after = iso_days_ago(14)
-    query = f"created:>{created_after} stars:>20"
+    sent_item_keys = get_sent_item_keys()
+    updated_after = iso_days_ago(7)
+    query = f"stars:>20 pushed:>{updated_after}"
 
     resp = requests.get(
         "https://api.github.com/search/repositories",
         headers=headers,
         params={
             "q": query,
-            "sort": "stars",
+            "sort": "updated",
             "order": "desc",
-            "per_page": 20,
+            "per_page": 50,
         },
         timeout=30,
     )
@@ -76,6 +116,7 @@ def fetch_github_repos() -> List[DigestItem]:
 
     items = resp.json().get("items", [])
     results: List[DigestItem] = []
+    seen_repo_keys = set()
 
     for repo in items:
         full_name = repo.get("full_name", "Untitled repo")
@@ -92,35 +133,44 @@ def fetch_github_repos() -> List[DigestItem]:
             f"Topics: {', '.join(repo.get('topics', [])[:6])}."
         )
 
+        repo_url = repo.get("html_url", "")
+        key = item_key("Repo", full_name, repo_url)
+        if key in seen_repo_keys:
+            continue
+
+        seen_repo_keys.add(key)
         results.append(
             {
                 "category": "Repo",
                 "title": full_name,
-                "url": repo.get("html_url", ""),
+                "url": repo_url,
                 "raw_text": truncate(raw_text),
+                "item_key": key,
             }
         )
 
-        if len(results) >= MAX_ITEMS_PER_CATEGORY:
-            break
-
-    return results
+    prioritized = prioritize_unseen(results, sent_item_keys)
+    return prioritized[:MAX_ITEMS_PER_CATEGORY]
 
 
 def fetch_news_items() -> List[DigestItem]:
     results: List[DigestItem] = []
+    sent_item_keys = get_sent_item_keys()
 
     for feed_url in NEWS_FEED_URLS:
         feed = feedparser.parse(feed_url)
-        for entry in feed.entries[:MAX_ITEMS_PER_CATEGORY]:
+        for entry in feed.entries[:10]:
             summary = entry.get("summary", "") or entry.get("description", "")
+            title = entry.get("title", "Untitled news item")
+            url = entry.get("link", "")
             raw_text = f"{entry.get('title', '')}. {summary}"
             results.append(
                 {
                     "category": "News",
-                    "title": entry.get("title", "Untitled news item"),
-                    "url": entry.get("link", ""),
+                    "title": title,
+                    "url": url,
                     "raw_text": truncate(raw_text),
+                    "item_key": item_key("News", title, url),
                 }
             )
 
@@ -132,11 +182,13 @@ def fetch_news_items() -> List[DigestItem]:
             seen.add(key)
             deduped.append(item)
 
-    return deduped[:MAX_ITEMS_PER_CATEGORY]
+    prioritized = prioritize_unseen(deduped, sent_item_keys)
+    return prioritized[:MAX_ITEMS_PER_CATEGORY]
 
 
 def fetch_openfda_regulatory_items() -> List[DigestItem]:
     results: List[DigestItem] = []
+    sent_item_keys = get_sent_item_keys()
 
     endpoints = [
         {
@@ -192,16 +244,15 @@ def fetch_openfda_regulatory_items() -> List[DigestItem]:
                         "title": title[:180],
                         "url": endpoint["url"],
                         "raw_text": truncate(raw_text),
+                        "item_key": item_key("Regulatory", title[:180], endpoint["url"]),
                     }
                 )
-
-                if len(results) >= MAX_ITEMS_PER_CATEGORY:
-                    return results
 
         except Exception as e:
             print(f"Warning: failed regulatory endpoint {endpoint['url']}: {e}")
 
-    return results[:MAX_ITEMS_PER_CATEGORY]
+    prioritized = prioritize_unseen(results, sent_item_keys)
+    return prioritized[:MAX_ITEMS_PER_CATEGORY]
 
 
 def get_real_items() -> List[DigestItem]:
