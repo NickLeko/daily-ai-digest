@@ -23,6 +23,15 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Restore digest state cache
+        id: state-cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: data/state
+          key: digest-state-${{ github.run_id }}
+          restore-keys: |
+            digest-state-
+
       - name: Check Pacific schedule window
         id: gate
         run: |
@@ -62,3 +71,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LOCAL_TIMEZONE: America/Los_Angeles
         run: python main.py
+
+      - name: Save digest state cache
+        if: ${{ steps.gate.outputs.should_run == 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: data/state
+          key: digest-state-${{ github.run_id }}
