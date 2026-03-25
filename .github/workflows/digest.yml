@@ -1,7 +1,14 @@
 name: Daily AI Digest
 
 on:
+  schedule:
+    - cron: '0 14 * * *'
+    - cron: '0 15 * * *'
   workflow_dispatch:
+
+concurrency:
+  group: daily-ai-digest
+  cancel-in-progress: false
 
 jobs:
   run-digest:
@@ -16,14 +23,42 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Check Pacific schedule window
+        id: gate
+        run: |
+          python - <<'PY'
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+
+          pacific_now = datetime.now(ZoneInfo("America/Los_Angeles"))
+          should_run = pacific_now.hour == 7
+          print(f"Pacific time now: {pacific_now.isoformat()}")
+          print(f"Proceed with digest: {should_run}")
+          PY
+          echo "should_run=$(python - <<'PY'
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          print("true" if datetime.now(ZoneInfo("America/Los_Angeles")).hour == 7 else "false")
+          PY
+          )" >> "$GITHUB_OUTPUT"
+
+      - name: Stop early when outside 7am Pacific
+        if: ${{ steps.gate.outputs.should_run != 'true' }}
+        run: |
+          echo "Skipping run because it is not 7:00 AM in America/Los_Angeles."
+          exit 0
+
       - name: Install dependencies
+        if: ${{ steps.gate.outputs.should_run == 'true' }}
         run: pip install -r requirements.txt
 
       - name: Run script
+        if: ${{ steps.gate.outputs.should_run == 'true' }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LOCAL_TIMEZONE: America/Los_Angeles
         run: python main.py
