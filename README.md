@@ -1,8 +1,8 @@
 # Daily AI Digest
 
-Automated daily intelligence system for healthcare AI product managers.
+Personal healthcare AI intelligence automation for signal monitoring and prioritization.
 
-Ingests real-world signals from GitHub, healthcare news, and FDA regulatory data, then uses LLMs to generate a prioritized, actionable daily briefing with signal scoring and a synthesized top insight.
+It pulls signals from GitHub, healthcare news, and FDA regulatory data, then uses LLMs to turn them into a concise daily briefing with summaries, priority scoring, and a synthesized top insight.
 
 ---
 
@@ -75,17 +75,6 @@ State is stored in `data/state/digest_state.json` so the app can:
 
 ---
 
-## ⚙️ Tech Stack
-
-- **Python**
-- **OpenAI API:** (LLM summarization + synthesis)
-- **GitHub REST API**
-- **RSS feeds:** (healthcare news)
-- **openFDA API:** (regulatory data)
-- **launchd:** (MacOS scheduling)
-
----
-
 ## 🎯 Purpose
 
 Built as a personal intelligence system to:
@@ -101,18 +90,24 @@ Built as a personal intelligence system to:
 - LLM-based summarization + synthesis
 - Signal prioritization layer
 - Fully automated daily delivery
-- Production-style scheduling (`launchd`)
+- Local scheduling with `launchd`
 
 ---
 
 ## 🧭 Why this matters
 
-Healthcare AI is shifting from experimentation to operational deployment. This system focuses on:
-- **Reliability**
-- **Workflow ROI**
-- **Regulatory awareness**
+Healthcare AI is moving from experimentation into real workflows. This project is meant to help surface signal over noise, with an emphasis on product relevance, operational utility, and regulatory awareness.
 
-It prioritizes clinical and operational utility over model capability alone.
+---
+
+## ⚙️ Tech Stack
+
+- **Python**
+- **OpenAI API:** (LLM summarization + synthesis)
+- **GitHub REST API**
+- **RSS feeds:** (healthcare news)
+- **openFDA API:** (regulatory data)
+- **launchd:** (macOS scheduling)
 
 ---
 
