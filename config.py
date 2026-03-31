@@ -5,8 +5,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+DEFAULT_NEWS_FEED_URLS = [
+    "https://www.healthcareitnews.com/home/feed",
+    "https://www.mobihealthnews.com/rss.xml",
+]
+
+
 def get_env(name: str, required: bool = True, default: str | None = None) -> str:
-    value = os.getenv(name, default)
+    value = os.getenv(name)
+    if value is None or not str(value).strip():
+        value = default
     if required and not value:
         raise ValueError(f"Missing required environment variable: {name}")
     return value or ""
@@ -25,12 +33,19 @@ EMAIL_SUBJECT_PREFIX = get_env(
 GITHUB_TOKEN = get_env("GITHUB_TOKEN", required=False, default="")
 NEWS_FEED_URLS = [
     url.strip()
-    for url in get_env("NEWS_FEED_URLS", required=False, default="").split(",")
+    for url in get_env(
+        "NEWS_FEED_URLS",
+        required=False,
+        default=",".join(DEFAULT_NEWS_FEED_URLS),
+    ).split(",")
     if url.strip()
 ]
 
 MAX_ITEMS_PER_CATEGORY = int(
     get_env("MAX_ITEMS_PER_CATEGORY", required=False, default="3")
+)
+REGULATORY_TARGET_ITEMS = int(
+    get_env("REGULATORY_TARGET_ITEMS", required=False, default="2")
 )
 
 LOCAL_TIMEZONE = get_env(

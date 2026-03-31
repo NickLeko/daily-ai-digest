@@ -1,12 +1,19 @@
 from collections import defaultdict
-from datetime import datetime
 from typing import Dict, List
+
+from state import local_now
 
 
 CATEGORY_HEADINGS = {
     "Repo": "Repos",
     "News": "News",
     "Regulatory": "Regulatory Updates",
+}
+
+EMPTY_SECTION_MESSAGES = {
+    "Repo": "No qualifying repositories were available today.",
+    "News": "No high-signal general AI/healthcare news passed filters today.",
+    "Regulatory": "No high-signal regulatory updates passed filters today.",
 }
 
 SIGNAL_STYLES = {
@@ -27,6 +34,8 @@ SIGNAL_STYLES = {
     },
 }
 
+SECTION_ORDER = ["Repo", "News", "Regulatory"]
+
 
 def render_signal_badge(signal: str) -> str:
     style = SIGNAL_STYLES.get(signal.lower(), SIGNAL_STYLES["medium"])
@@ -43,19 +52,60 @@ def sort_items_by_signal(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
     return sorted(items, key=lambda x: rank.get(x.get("signal", "medium"), 1))
 
 
+def build_section_counts(items: List[Dict[str, str]]) -> Dict[str, int]:
+    counts = {category: 0 for category in SECTION_ORDER}
+    for item in items:
+        category = item.get("category", "")
+        if category in counts:
+            counts[category] += 1
+    return counts
+
+
+def validate_digest_items(items: List[Dict[str, str]]) -> Dict[str, int]:
+    unknown_categories = sorted(
+        {item.get("category", "") for item in items if item.get("category", "") not in CATEGORY_HEADINGS}
+    )
+    if unknown_categories:
+        raise ValueError(
+            f"Unknown digest categories encountered during render: {', '.join(unknown_categories)}"
+        )
+
+    counts = build_section_counts(items)
+    assert sum(counts.values()) == len(items), "Digest section counts do not match the rendered item count."
+    return counts
+
+
+def category_count_label(category: str, count: int) -> str:
+    if category == "Repo":
+        return f"{count} {'repo' if count == 1 else 'repos'}"
+    if category == "News":
+        return f"{count} {'news item' if count == 1 else 'news items'}"
+    return f"{count} {'regulatory update' if count == 1 else 'regulatory updates'}"
+
+
+def build_summary_line(counts: Dict[str, int]) -> str:
+    return (
+        f"{category_count_label('Repo', counts['Repo'])}, "
+        f"{category_count_label('News', counts['News'])}, "
+        f"and {category_count_label('Regulatory', counts['Regulatory'])}. "
+        "Concise and signal-heavy."
+    )
+
+
 def format_digest_html(items: List[Dict[str, str]], top_insight: str) -> str:
+    counts = validate_digest_items(items)
     grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
     for item in items:
         grouped[item["category"]].append(item)
 
-    date_str = datetime.now().strftime("%B %d, %Y")
+    date_str = local_now().strftime("%B %d, %Y")
 
     html = f"""
     <html>
       <body style="font-family: Arial, sans-serif; line-height: 1.5; color: #222; max-width: 800px; margin: 0 auto; padding: 12px;">
         <h2>Daily AI Digest</h2>
         <p><strong>Date:</strong> {date_str}</p>
-        <p>3 repos, 3 news items, and 3 regulatory updates. Concise and signal-heavy.</p>
+        <p>{build_summary_line(counts)}</p>
 
         <div style="margin: 18px 0 24px 0; padding: 14px 16px; border-left: 4px solid #0b57d0; background: #f8fbff;">
           <p style="margin: 0 0 6px 0; font-size: 13px; font-weight: bold; color: #0b57d0; letter-spacing: 0.02em;">
@@ -65,11 +115,19 @@ def format_digest_html(items: List[Dict[str, str]], top_insight: str) -> str:
         </div>
     """
 
-    for category in ["Repo", "News", "Regulatory"]:
+    for category in SECTION_ORDER:
         heading = CATEGORY_HEADINGS.get(category, category)
         html += f"<h3>{heading}</h3>"
 
         sorted_items = sort_items_by_signal(grouped.get(category, []))
+        if not sorted_items:
+            html += (
+                f"<p style=\"margin: 0 0 16px 0; color: #666;\">"
+                f"<em>{EMPTY_SECTION_MESSAGES[category]}</em>"
+                f"</p>"
+            )
+            continue
+
         for item in sorted_items:
             badge_html = render_signal_badge(item.get("signal", "medium"))
             html += f"""

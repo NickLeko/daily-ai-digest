@@ -9,6 +9,37 @@ from config import OPENAI_API_KEY, OPENAI_MODEL
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 
+def parse_json_payload(text: str) -> Dict[str, str] | None:
+    candidate = (text or "").strip()
+    if not candidate:
+        return None
+
+    if candidate.startswith("```"):
+        lines = candidate.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        candidate = "\n".join(lines).strip()
+
+    try:
+        parsed = json.loads(candidate)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+
+    try:
+        parsed = json.loads(candidate[start : end + 1])
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
 def summarize_item(item: Dict[str, str]) -> Dict[str, str]:
     category_specific_rule = ""
     if item["category"] == "Regulatory":
@@ -67,7 +98,9 @@ Additional category rule:
     text = response.output_text.strip()
 
     try:
-        parsed = json.loads(text)
+        parsed = parse_json_payload(text)
+        if not parsed:
+            raise ValueError("No JSON payload found.")
         summary = parsed["summary"].strip()
         why_it_matters = parsed["why_it_matters"].strip()
         signal = parsed["signal"].strip().lower()
@@ -131,7 +164,14 @@ Rules:
     text = response.output_text.strip()
 
     try:
-        parsed = json.loads(text)
-        return parsed["top_insight"].strip()
+        parsed = parse_json_payload(text)
+        if parsed and parsed.get("top_insight"):
+            return str(parsed["top_insight"]).strip()
     except Exception:
-        return "Operational reliability, workflow ROI, and governance are becoming more important than raw model novelty in healthcare AI adoption."
+        pass
+
+    cleaned_text = text.strip().strip("`").strip()
+    if cleaned_text and "top_insight" not in cleaned_text.lower():
+        return cleaned_text
+
+    return "Operational reliability, workflow ROI, and governance are becoming more important than raw model novelty in healthcare AI adoption."
