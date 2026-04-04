@@ -18,6 +18,7 @@ It pulls signals from GitHub, healthcare news, and FDA/CMS/ONC regulatory data, 
 - **Action-oriented "Why it matters" insights**
 - **Weighted personalization scoring:** career, build, content, regulatory, side-hustle, timeliness, novelty
 - **Repeat/theme awareness:** lightweight memory influences ranking over time
+- **Digest Analyst Agent layer:** optional in-process OpenAI Agents SDK judgment pass with safe fallback
 - **Cross-source synthesis:** top picks, Top Insight, and compact operator moves
 
 ### Output
@@ -54,6 +55,7 @@ GMAIL_APP_PASSWORD=your_app_password
 TO_EMAIL=recipient@email.com
 GITHUB_TOKEN=your_token_here (optional)
 LOCAL_TIMEZONE=America/Los_Angeles
+DIGEST_ANALYST_AGENT_ENABLED=true
 ```
 
 ---
@@ -113,7 +115,7 @@ Healthcare AI is moving from experimentation into real workflows. This project i
 - **GitHub REST API**
 - **RSS feeds:** (healthcare news)
 - **openFDA API:** (regulatory data)
-- **launchd:** (macOS scheduling)
+- **GitHub Actions:** (daily scheduling)
 
 ---
 
@@ -122,4 +124,5 @@ Healthcare AI is moving from experimentation into real workflows. This project i
 - `.env` is excluded from version control.
 - Logs are saved locally in `log.txt` and `error.txt`.
 - `data/state/` is intentionally gitignored and cached by the workflow so runtime state can persist without adding new infrastructure.
+- The Digest Analyst Agent uses the same `OPENAI_API_KEY`; disable it with `DIGEST_ANALYST_AGENT_ENABLED=false` if needed.
 - Designed for extensibility (add new sources, filters, or scoring logic easily).

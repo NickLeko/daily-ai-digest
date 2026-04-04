@@ -1,5 +1,14 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+
+from agent_brief import (
+    DigestOperatorBrief,
+    build_agent_brief,
+    build_agent_input,
+    build_operator_brief,
+    coerce_brief_output,
+)
 
 from data import (
     REGULATORY_FEED_SOURCES,
@@ -333,6 +342,95 @@ class SummarizeParsingTests(unittest.TestCase):
                 "signal": "high",
             },
         )
+
+
+class AgentBriefTests(unittest.TestCase):
+    def test_build_agent_input_uses_compact_item_shape(self) -> None:
+        payload = build_agent_input(
+            [
+                {
+                    "category": "News",
+                    "title": "Signal",
+                    "summary": "Short summary.",
+                    "why_it_matters": "Short why.",
+                    "signal": "high",
+                    "priority_score": 10.2,
+                    "objective_scores": {"career": 4.5},
+                    "score_focus": ["career_relevance"],
+                    "matched_themes": ["healthcare_admin_automation"],
+                    "raw_text": "Should not be forwarded.",
+                }
+            ],
+            {"top_themes": [{"theme": "healthcare_admin_automation", "count": 2}]},
+        )
+
+        self.assertIn('"today_items"', payload)
+        self.assertIn('"matched_themes"', payload)
+        self.assertNotIn("Should not be forwarded.", payload)
+
+    def test_coerce_brief_output_requires_top_insight(self) -> None:
+        self.assertIsNone(coerce_brief_output({"content_angle": "Only content"}))
+
+        brief = coerce_brief_output(
+            {
+                "top_insight": "Focus on prior auth workflow ROI.",
+                "build_idea": "Denial summary copilot.",
+            }
+        )
+
+        self.assertEqual(
+            brief,
+            DigestOperatorBrief(
+                top_insight="Focus on prior auth workflow ROI.",
+                content_angle="",
+                build_idea="Denial summary copilot.",
+                interview_talking_point="",
+                watch_item="",
+            ),
+        )
+
+    def test_build_agent_brief_returns_structured_output_when_agent_succeeds(self) -> None:
+        with patch("agent_brief.DIGEST_ANALYST_AGENT_ENABLED", True), patch(
+            "agent_brief._run_digest_analyst_agent_sync",
+            return_value=DigestOperatorBrief(
+                top_insight="Operational AI wins where workflow pain is concrete.",
+                content_angle="Write about why workflow AI beats generic copilots.",
+            ),
+        ):
+            brief = build_agent_brief([render_item("News", "Signal")], {})
+
+        self.assertEqual(
+            brief,
+            DigestOperatorBrief(
+                top_insight="Operational AI wins where workflow pain is concrete.",
+                content_angle="Write about why workflow AI beats generic copilots.",
+                build_idea="",
+                interview_talking_point="",
+                watch_item="",
+            ),
+        )
+
+    def test_build_operator_brief_falls_back_when_agent_fails(self) -> None:
+        fallback = {
+            "top_insight": "Fallback insight.",
+            "content_angle": "Fallback content.",
+            "build_idea": "",
+            "interview_talking_point": "",
+            "watch_item": "",
+        }
+
+        with patch("agent_brief.DIGEST_ANALYST_AGENT_ENABLED", True), patch(
+            "agent_brief._run_digest_analyst_agent_sync",
+            side_effect=TimeoutError("agent timed out"),
+        ), patch(
+            "agent_brief.summarize_digest_strategy",
+            return_value=fallback,
+        ), patch(
+            "builtins.print",
+        ):
+            result = build_operator_brief([render_item("News", "Signal")], {})
+
+        self.assertEqual(result, fallback)
 
 
 class PersonalizationScoringTests(unittest.TestCase):

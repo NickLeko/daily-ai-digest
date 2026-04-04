@@ -20,8 +20,33 @@ def get_env(name: str, required: bool = True, default: str | None = None) -> str
     return value or ""
 
 
+def get_env_bool(name: str, default: bool = False) -> bool:
+    raw_value = get_env(
+        name,
+        required=False,
+        default="true" if default else "false",
+    )
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 OPENAI_API_KEY = get_env("OPENAI_API_KEY")
 OPENAI_MODEL = get_env("OPENAI_MODEL", required=False, default="gpt-4.1-mini")
+DIGEST_ANALYST_AGENT_ENABLED = get_env_bool(
+    "DIGEST_ANALYST_AGENT_ENABLED",
+    default=True,
+)
+DIGEST_ANALYST_AGENT_MODEL = get_env(
+    "DIGEST_ANALYST_AGENT_MODEL",
+    required=False,
+    default=OPENAI_MODEL,
+)
+DIGEST_ANALYST_AGENT_TIMEOUT_SECONDS = int(
+    get_env(
+        "DIGEST_ANALYST_AGENT_TIMEOUT_SECONDS",
+        required=False,
+        default="20",
+    )
+)
 
 GMAIL_ADDRESS = get_env("GMAIL_ADDRESS")
 GMAIL_APP_PASSWORD = get_env("GMAIL_APP_PASSWORD")
