@@ -1,4 +1,5 @@
 from collections import defaultdict
+from html import escape
 from typing import Dict, List
 
 from state import local_now
@@ -47,9 +48,20 @@ def render_signal_badge(signal: str) -> str:
     )
 
 
-def sort_items_by_signal(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
+def escaped(value: object) -> str:
+    return escape(str(value or ""), quote=True)
+
+
+def sort_items_for_render(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
     rank = {"high": 0, "medium": 1, "low": 2}
-    return sorted(items, key=lambda x: rank.get(x.get("signal", "medium"), 1))
+    return sorted(
+        items,
+        key=lambda item: (
+            float(item.get("priority_score", 0.0) or 0.0),
+            -rank.get(item.get("signal", "medium"), 1),
+        ),
+        reverse=True,
+    )
 
 
 def build_section_counts(items: List[Dict[str, str]]) -> Dict[str, int]:
@@ -92,7 +104,72 @@ def build_summary_line(counts: Dict[str, int]) -> str:
     )
 
 
-def format_digest_html(items: List[Dict[str, str]], top_insight: str) -> str:
+def render_top_picks(top_picks: List[Dict[str, object]] | None) -> str:
+    if not top_picks:
+        return ""
+
+    rows = []
+    for pick in top_picks:
+        item = pick.get("item", {}) or {}
+        rows.append(
+            f"""
+            <p style="margin: 0 0 8px 0;">
+              <strong>{escaped(pick.get('label', 'Top pick'))}:</strong>
+              <a href="{escaped(item.get('url', '#'))}" style="color: #0b57d0; text-decoration: none; font-weight: 600;">
+                {escaped(item.get('title', 'Untitled'))}
+              </a>
+            </p>
+            """
+        )
+
+    return f"""
+        <div style="margin: 18px 0 16px 0; padding: 14px 16px; border: 1px solid #d6e4ff; border-radius: 10px; background: #f8fbff;">
+          <p style="margin: 0 0 10px 0; font-size: 13px; font-weight: bold; color: #0b57d0; letter-spacing: 0.02em;">
+            TOP PICKS BY OBJECTIVE
+          </p>
+          {''.join(rows)}
+        </div>
+    """
+
+
+def render_action_footer(action_brief: Dict[str, str] | None) -> str:
+    if not action_brief:
+        return ""
+
+    action_labels = [
+        ("content_angle", "Content angle"),
+        ("build_idea", "Build idea"),
+        ("interview_talking_point", "Interview talking point"),
+        ("watch_item", "Watch"),
+    ]
+    rows = []
+    for key, label in action_labels:
+        value = str(action_brief.get(key, "") or "").strip()
+        if not value:
+            continue
+        rows.append(
+            f"<p style=\"margin: 0 0 8px 0;\"><strong>{escaped(label)}:</strong> {escaped(value)}</p>"
+        )
+
+    if not rows:
+        return ""
+
+    return f"""
+        <div style="margin: 20px 0 8px 0; padding: 14px 16px; border-left: 4px solid #0f766e; background: #f0fdfa;">
+          <p style="margin: 0 0 10px 0; font-size: 13px; font-weight: bold; color: #0f766e; letter-spacing: 0.02em;">
+            OPERATOR MOVES
+          </p>
+          {''.join(rows)}
+        </div>
+    """
+
+
+def format_digest_html(
+    items: List[Dict[str, str]],
+    top_insight: str,
+    top_picks: List[Dict[str, object]] | None = None,
+    action_brief: Dict[str, str] | None = None,
+) -> str:
     counts = validate_digest_items(items)
     grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
     for item in items:
@@ -103,15 +180,16 @@ def format_digest_html(items: List[Dict[str, str]], top_insight: str) -> str:
     html = f"""
     <html>
       <body style="font-family: Arial, sans-serif; line-height: 1.5; color: #222; max-width: 800px; margin: 0 auto; padding: 12px;">
-        <h2>Daily AI Digest</h2>
+        <h2>Daily AI Digest v2</h2>
         <p><strong>Date:</strong> {date_str}</p>
         <p>{build_summary_line(counts)}</p>
 
+        {render_top_picks(top_picks)}
         <div style="margin: 18px 0 24px 0; padding: 14px 16px; border-left: 4px solid #0b57d0; background: #f8fbff;">
           <p style="margin: 0 0 6px 0; font-size: 13px; font-weight: bold; color: #0b57d0; letter-spacing: 0.02em;">
             TOP INSIGHT
           </p>
-          <p style="margin: 0; font-size: 16px;">{top_insight}</p>
+          <p style="margin: 0; font-size: 16px;">{escaped(top_insight)}</p>
         </div>
     """
 
@@ -119,11 +197,11 @@ def format_digest_html(items: List[Dict[str, str]], top_insight: str) -> str:
         heading = CATEGORY_HEADINGS.get(category, category)
         html += f"<h3>{heading}</h3>"
 
-        sorted_items = sort_items_by_signal(grouped.get(category, []))
+        sorted_items = sort_items_for_render(grouped.get(category, []))
         if not sorted_items:
             html += (
                 f"<p style=\"margin: 0 0 16px 0; color: #666;\">"
-                f"<em>{EMPTY_SECTION_MESSAGES[category]}</em>"
+                f"<em>{escaped(EMPTY_SECTION_MESSAGES[category])}</em>"
                 f"</p>"
             )
             continue
@@ -134,15 +212,16 @@ def format_digest_html(items: List[Dict[str, str]], top_insight: str) -> str:
             <div style="margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid #ddd;">
               {badge_html}
               <p style="margin: 0 0 6px 0;">
-                <a href="{item['url']}" style="font-size: 16px; font-weight: bold; color: #0b57d0; text-decoration: none;">
-                  {item['title']}
+                <a href="{escaped(item['url'])}" style="font-size: 16px; font-weight: bold; color: #0b57d0; text-decoration: none;">
+                  {escaped(item['title'])}
                 </a>
               </p>
-              <p style="margin: 0 0 8px 0;">{item['summary']}</p>
-              <p style="margin: 0; color: #444;"><strong>Why it matters:</strong> {item['why_it_matters']}</p>
+              <p style="margin: 0 0 8px 0;">{escaped(item['summary'])}</p>
+              <p style="margin: 0; color: #444;"><strong>Why it matters:</strong> {escaped(item['why_it_matters'])}</p>
             </div>
             """
 
+    html += render_action_footer(action_brief)
     html += """
       </body>
     </html>

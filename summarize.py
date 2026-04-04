@@ -3,7 +3,7 @@ from typing import Dict, List
 
 from openai import OpenAI
 
-from config import OPENAI_API_KEY, OPENAI_MODEL
+from config import OPENAI_API_KEY, OPENAI_MODEL, PRIORITY_THEME_RULES
 
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -40,6 +40,35 @@ def parse_json_payload(text: str) -> Dict[str, str] | None:
         return None
 
 
+def theme_labels(theme_keys: List[str]) -> List[str]:
+    return [
+        PRIORITY_THEME_RULES.get(theme_key, {}).get("label", theme_key)
+        for theme_key in theme_keys
+    ]
+
+
+def item_prompt_context(item: Dict[str, str]) -> str:
+    dimensions = item.get("score_dimensions", {}) or {}
+    strongest_dimensions = item.get("score_focus", []) or []
+    objective_scores = item.get("objective_scores", {}) or {}
+    top_objective = max(
+        objective_scores.items(),
+        key=lambda entry: entry[1],
+        default=("career", 0.0),
+    )[0]
+    dimension_summary = ", ".join(
+        f"{key}={value}"
+        for key, value in dimensions.items()
+        if key in strongest_dimensions
+    ) or "none"
+    theme_summary = ", ".join(theme_labels(item.get("matched_themes", []) or [])) or "none"
+    return (
+        f"Matched themes: {theme_summary}. "
+        f"Strongest scoring dimensions: {dimension_summary}. "
+        f"Top objective: {top_objective}."
+    )
+
+
 def summarize_item(item: Dict[str, str]) -> Dict[str, str]:
     category_specific_rule = ""
     if item["category"] == "Regulatory":
@@ -59,6 +88,7 @@ You are writing a daily digest for a healthcare AI product manager.
 Category: {item["category"]}
 Title: {item["title"]}
 URL: {item["url"]}
+Priority context: {item_prompt_context(item)}
 
 Raw text:
 {item["raw_text"]}
@@ -123,7 +153,38 @@ def summarize_items(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
     return [summarize_item(item) for item in items]
 
 
-def summarize_top_insight(items: List[Dict[str, str]]) -> str:
+def fallback_digest_strategy(items: List[Dict[str, str]]) -> Dict[str, str]:
+    ranked_items = sorted(
+        items,
+        key=lambda item: float(item.get("priority_score", 0.0) or 0.0),
+        reverse=True,
+    )
+    top_item = ranked_items[0] if ranked_items else {}
+    top_theme = theme_labels(top_item.get("matched_themes", []) or [])[:1]
+    theme_phrase = top_theme[0] if top_theme else "workflow ROI and governance"
+    watch_reference = top_item.get("source") or top_item.get("title") or "healthcare admin automation"
+
+    return {
+        "top_insight": (
+            f"Prioritize {theme_phrase.lower()} work that shows immediate workflow ROI and can survive governance scrutiny."
+        ),
+        "content_angle": (
+            f"The wedge is narrower than generic AI hype: {theme_phrase} with operational proof."
+        ),
+        "build_idea": (
+            "Prototype a single workflow assistant around prior auth, claims, or documentation handoffs."
+        ),
+        "interview_talking_point": (
+            "Talk about ranking healthcare AI bets by workflow pain, compliance surface area, and measurable operator lift."
+        ),
+        "watch_item": f"Watch {watch_reference} for repeat signal and operator relevance.",
+    }
+
+
+def summarize_digest_strategy(
+    items: List[Dict[str, str]],
+    memory_snapshot: Dict[str, object] | None = None,
+) -> Dict[str, str]:
     compact_items = []
     for item in items:
         compact_items.append(
@@ -133,28 +194,39 @@ def summarize_top_insight(items: List[Dict[str, str]]) -> str:
                 "summary": item["summary"],
                 "why_it_matters": item["why_it_matters"],
                 "signal": item["signal"],
+                "priority_score": item.get("priority_score", 0.0),
+                "matched_themes": theme_labels(item.get("matched_themes", []) or []),
+                "objective_scores": item.get("objective_scores", {}),
             }
         )
 
     prompt = f"""
-You are writing a single top-line insight for a healthcare AI product manager.
+You are writing a daily operator brief for a healthcare AI product manager.
 
 Below is today's digest content:
 {json.dumps(compact_items, indent=2)}
 
+Recent memory snapshot:
+{json.dumps(memory_snapshot or {}, indent=2)}
+
 Return valid JSON only:
 {{
-  "top_insight": "One sentence, sharp and synthesis-heavy."
+  "top_insight": "One sentence, direct and action-oriented.",
+  "content_angle": "One short sentence or phrase.",
+  "build_idea": "One short sentence or phrase.",
+  "interview_talking_point": "One short sentence or phrase.",
+  "watch_item": "One short sentence or phrase."
 }}
 
 Rules:
-- One sentence only
+- Top insight must be one sentence only
 - No hype
 - No generic language
-- Focus on the most important cross-cutting pattern
+- Focus on what deserves attention or action next
 - Write like an operator, not a newsletter writer
+- Keep every field concise and practical
+- Empty strings are allowed if evidence is weak, but prefer useful specificity
 """.strip()
-    
 
     response = client.responses.create(
         model=OPENAI_MODEL,
@@ -166,12 +238,21 @@ Rules:
     try:
         parsed = parse_json_payload(text)
         if parsed and parsed.get("top_insight"):
-            return str(parsed["top_insight"]).strip()
+            return {
+                "top_insight": str(parsed.get("top_insight", "") or "").strip(),
+                "content_angle": str(parsed.get("content_angle", "") or "").strip(),
+                "build_idea": str(parsed.get("build_idea", "") or "").strip(),
+                "interview_talking_point": str(
+                    parsed.get("interview_talking_point", "") or ""
+                ).strip(),
+                "watch_item": str(parsed.get("watch_item", "") or "").strip(),
+            }
     except Exception:
         pass
 
+    fallback = fallback_digest_strategy(items)
     cleaned_text = text.strip().strip("`").strip()
     if cleaned_text and "top_insight" not in cleaned_text.lower():
-        return cleaned_text
+        fallback["top_insight"] = cleaned_text
 
-    return "Operational reliability, workflow ROI, and governance are becoming more important than raw model novelty in healthcare AI adoption."
+    return fallback

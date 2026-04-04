@@ -12,6 +12,8 @@ from data import (
     select_regulatory_items,
 )
 from formatter import format_digest_html
+from memory import build_memory_snapshot
+from scoring import attach_priority_scores, build_top_picks
 from summarize import parse_json_payload
 
 
@@ -107,6 +109,94 @@ class FormatterTests(unittest.TestCase):
             html,
         )
         self.assertIn("1 repo, 1 news item, and 0 regulatory updates.", html)
+
+    def test_top_picks_and_operator_moves_render_compact_sections(self) -> None:
+        items = [
+            {
+                **render_item("News", "Career Signal"),
+                "priority_score": 40.0,
+                "objective_scores": {
+                    "career": 7.5,
+                    "build": 2.0,
+                    "content": 5.0,
+                    "regulatory": 3.0,
+                },
+            },
+            {
+                **render_item("Repo", "Build Signal"),
+                "priority_score": 38.0,
+                "objective_scores": {
+                    "career": 2.0,
+                    "build": 8.0,
+                    "content": 4.0,
+                    "regulatory": 1.0,
+                },
+            },
+            {
+                **render_item("Regulatory", "Reg Signal"),
+                "priority_score": 35.0,
+                "objective_scores": {
+                    "career": 4.0,
+                    "build": 1.0,
+                    "content": 3.0,
+                    "regulatory": 8.5,
+                },
+            },
+            {
+                **render_item("News", "Content Signal"),
+                "priority_score": 33.0,
+                "objective_scores": {
+                    "career": 3.0,
+                    "build": 2.0,
+                    "content": 7.2,
+                    "regulatory": 1.0,
+                },
+            },
+        ]
+
+        html = format_digest_html(
+            items,
+            "Bias attention toward admin automation with clean governance signals.",
+            top_picks=build_top_picks(items),
+            action_brief={
+                "content_angle": "Write about why prior auth automation is a wedge, not a feature.",
+                "build_idea": "Prototype a denial-appeal summary copilot.",
+                "interview_talking_point": "Rank bets by workflow pain and compliance surface area.",
+            },
+        )
+
+        self.assertIn("TOP PICKS BY OBJECTIVE", html)
+        self.assertIn("Top item for career", html)
+        self.assertIn("OPERATOR MOVES", html)
+        self.assertIn("Build idea:", html)
+
+    def test_formatter_escapes_dynamic_html_content(self) -> None:
+        html = format_digest_html(
+            [
+                {
+                    **render_item("News", "<Unsafe Title>"),
+                    "summary": "Summary with <b>tag</b>.",
+                    "why_it_matters": "Because <script>alert(1)</script>.",
+                }
+            ],
+            'Insight with <script>alert("x")</script>',
+            top_picks=[
+                {
+                    "label": "Top item for career",
+                    "item": {
+                        "title": "<Unsafe Pick>",
+                        "url": 'https://example.com/?q=<unsafe>',
+                    },
+                }
+            ],
+            action_brief={"build_idea": "Ship <fast> and keep it safe."},
+        )
+
+        self.assertIn("&lt;Unsafe Title&gt;", html)
+        self.assertIn("Summary with &lt;b&gt;tag&lt;/b&gt;.", html)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+        self.assertIn("&lt;Unsafe Pick&gt;", html)
+        self.assertIn("https://example.com/?q=&lt;unsafe&gt;", html)
 
 
 class RegulatoryKeywordTests(unittest.TestCase):
@@ -242,6 +332,125 @@ class SummarizeParsingTests(unittest.TestCase):
                 "why_it_matters": "One sentence.",
                 "signal": "high",
             },
+        )
+
+
+class PersonalizationScoringTests(unittest.TestCase):
+    def test_admin_automation_item_scores_high_for_build_and_side_hustle(self) -> None:
+        now = datetime(2026, 4, 3, 15, 0, tzinfo=timezone.utc)
+        item = {
+            "category": "News",
+            "title": "CMS prior authorization automation rule",
+            "url": "https://example.com/news/prior-auth",
+            "raw_text": "Claims attachments, prior auth, workflow automation, and electronic signatures move closer to standardization.",
+            "item_key": "news::prior-auth",
+            "published_at": now - timedelta(hours=6),
+            "source": "CMS Newsroom",
+        }
+
+        scored = attach_priority_scores(
+            [item],
+            {"version": 1, "events": []},
+            now=now,
+        )[0]
+
+        self.assertIn("healthcare_admin_automation", scored["matched_themes"])
+        self.assertGreaterEqual(scored["score_dimensions"]["build_relevance"], 3.0)
+        self.assertGreaterEqual(
+            scored["score_dimensions"]["side_hustle_relevance"],
+            3.0,
+        )
+
+    def test_repeat_detection_lowers_novelty_but_keeps_theme_momentum(self) -> None:
+        now = datetime(2026, 4, 3, 15, 0, tzinfo=timezone.utc)
+        item = {
+            "category": "Repo",
+            "title": "acme/agent-eval-kit",
+            "url": "https://example.com/repo/agent-eval-kit",
+            "raw_text": "Agent orchestration and eval tooling for workflow monitoring.",
+            "item_key": "repo::agent-eval-kit",
+            "published_at": now - timedelta(hours=3),
+            "source": "GitHub Search",
+        }
+        memory = {
+            "version": 1,
+            "events": [
+                {
+                    "date": "2026-04-01",
+                    "item_key": "repo::agent-eval-kit",
+                    "themes": ["agents_workflows", "llm_eval_rag_governance_safety"],
+                    "entities": ["openai"],
+                },
+                {
+                    "date": "2026-04-02",
+                    "item_key": "news::agentic-workflow",
+                    "themes": ["agents_workflows"],
+                    "entities": ["openai"],
+                },
+            ],
+        }
+
+        scored = attach_priority_scores([item], memory, now=now)[0]
+
+        self.assertLess(scored["score_dimensions"]["novelty"], 1.0)
+        self.assertGreater(scored["score_dimensions"]["theme_momentum"], 2.0)
+
+    def test_memory_snapshot_surfaces_top_recurring_theme(self) -> None:
+        now = datetime(2026, 4, 3, 15, 0, tzinfo=timezone.utc)
+        snapshot = build_memory_snapshot(
+            {
+                "version": 1,
+                "events": [
+                    {
+                        "date": "2026-04-01",
+                        "themes": ["agents_workflows"],
+                        "entities": ["openai"],
+                    },
+                    {
+                        "date": "2026-04-02",
+                        "themes": ["agents_workflows", "healthcare_admin_automation"],
+                        "entities": ["cms"],
+                    },
+                ],
+            },
+            now=now,
+        )
+
+        self.assertEqual(snapshot["top_themes"][0]["theme"], "agents_workflows")
+
+    def test_top_picks_can_reuse_the_same_best_item(self) -> None:
+        item = {
+            **render_item("News", "Best Overall"),
+            "priority_score": 50.0,
+            "objective_scores": {
+                "career": 9.0,
+                "build": 8.5,
+                "content": 9.1,
+                "regulatory": 8.8,
+            },
+            "item_key": "news::best-overall",
+        }
+
+        picks = build_top_picks(
+            [
+                item,
+                {
+                    **render_item("Repo", "Second Best"),
+                    "priority_score": 40.0,
+                    "objective_scores": {
+                        "career": 5.0,
+                        "build": 7.0,
+                        "content": 4.0,
+                        "regulatory": 2.0,
+                    },
+                    "item_key": "repo::second-best",
+                },
+            ]
+        )
+
+        self.assertEqual(len(picks), 4)
+        self.assertTrue(
+            all(pick["item"]["title"] == "Best Overall" for pick in picks)
         )
 
 

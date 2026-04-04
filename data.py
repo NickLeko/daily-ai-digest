@@ -17,6 +17,8 @@ from config import (
     NEWS_FEED_URLS,
     REGULATORY_TARGET_ITEMS,
 )
+from memory import DigestMemory, load_digest_memory
+from scoring import attach_priority_scores
 from state import get_sent_item_keys
 
 
@@ -62,7 +64,6 @@ REPO_EXCLUDED_KEYWORDS = [
     "web3",
 ]
 
-REGULATORY_SOURCE_AGE_LIMIT = timedelta(days=14)
 REGULATORY_FRESH_WINDOW = timedelta(hours=72)
 REGULATORY_RECENT_WINDOW = timedelta(days=7)
 REGULATORY_MIN_SELECTION_SCORE = 65
@@ -354,12 +355,6 @@ def item_key(category: str, title: str, url: str) -> str:
     return f"{category.lower()}::{normalized_title}::{normalized_url}"
 
 
-def prioritize_unseen(items: List[DigestItem], sent_item_keys: set[str]) -> List[DigestItem]:
-    unseen = [item for item in items if item.get("item_key", "") not in sent_item_keys]
-    seen = [item for item in items if item.get("item_key", "") in sent_item_keys]
-    return unseen + seen
-
-
 def normalize_text(value: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", (value or "").lower()))
 
@@ -454,12 +449,16 @@ def format_selected_items(items: List[DigestItem]) -> str:
     formatted = []
     for item in items:
         reference = item.get("id") or item.get("unique_id") or item.get("item_key") or item.get("title", "")
+        priority_score = item.get("priority_score")
+        priority_suffix = ""
+        if priority_score is not None:
+            priority_suffix = f" | priority={priority_score}"
         if item.get("category") == "Regulatory" and item.get("selection_score") is not None:
             formatted.append(
-                f"{reference} | {item.get('title', 'Untitled')} | {format_score_breakdown(item)}"
+                f"{reference} | {item.get('title', 'Untitled')} | {format_score_breakdown(item)}{priority_suffix}"
             )
         else:
-            formatted.append(f"{reference} | {item.get('title', 'Untitled')}")
+            formatted.append(f"{reference} | {item.get('title', 'Untitled')}{priority_suffix}")
     return "; ".join(formatted)
 
 
@@ -515,7 +514,27 @@ def repo_is_relevant(name: str, description: str) -> bool:
     return any(keyword in tokens for keyword in REPO_RELEVANT_KEYWORDS)
 
 
-def fetch_github_repos() -> List[DigestItem]:
+def select_scored_items(
+    items: List[DigestItem],
+    *,
+    sent_item_keys: set[str],
+    limit: int,
+    memory: DigestMemory | None = None,
+) -> List[DigestItem]:
+    scored = attach_priority_scores(items, memory, sort_items=False)
+    return sorted(
+        scored,
+        key=lambda item: (
+            item.get("item_key", "") not in sent_item_keys,
+            float(item.get("priority_score", 0.0) or 0.0),
+            item.get("published_at") or datetime.min.replace(tzinfo=timezone.utc),
+            item.get("title", ""),
+        ),
+        reverse=True,
+    )[:limit]
+
+
+def fetch_github_repos(memory: DigestMemory | None = None) -> List[DigestItem]:
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -575,16 +594,22 @@ def fetch_github_repos() -> List[DigestItem]:
                 "url": repo_url,
                 "raw_text": truncate(raw_text),
                 "item_key": key,
+                "published_at": parse_iso_datetime(repo.get("updated_at", "")),
+                "source": "GitHub Search",
             }
         )
 
-    prioritized = prioritize_unseen(results, sent_item_keys)
-    selected = prioritized[:MAX_ITEMS_PER_CATEGORY]
+    selected = select_scored_items(
+        results,
+        sent_item_keys=sent_item_keys,
+        limit=MAX_ITEMS_PER_CATEGORY,
+        memory=memory,
+    )
     log_section_debug("Repos", len(raw_items), len(results), excluded_reasons, selected)
     return selected
 
 
-def fetch_news_items() -> List[DigestItem]:
+def fetch_news_items(memory: DigestMemory | None = None) -> List[DigestItem]:
     results: List[DigestItem] = []
     sent_item_keys = get_sent_item_keys()
     excluded_reasons: Counter[str] = Counter()
@@ -640,8 +665,12 @@ def fetch_news_items() -> List[DigestItem]:
             seen_titles.add(title_key)
         deduped.append(item)
 
-    prioritized = prioritize_unseen(deduped, sent_item_keys)
-    selected = prioritized[:MAX_ITEMS_PER_CATEGORY]
+    selected = select_scored_items(
+        deduped,
+        sent_item_keys=sent_item_keys,
+        limit=MAX_ITEMS_PER_CATEGORY,
+        memory=memory,
+    )
     log_section_debug("News", raw_count, len(deduped), excluded_reasons, selected)
     return selected
 
@@ -1396,7 +1425,7 @@ def fetch_openfda_regulatory_items() -> Tuple[List[DigestItem], Dict[str, Any]]:
     }
 
 
-def fetch_regulatory_items() -> List[DigestItem]:
+def fetch_regulatory_items(memory: DigestMemory | None = None) -> List[DigestItem]:
     sent_item_keys = get_sent_item_keys()
     source_results = [
         fetch_openfda_regulatory_items(),
@@ -1438,13 +1467,14 @@ def fetch_regulatory_items() -> List[DigestItem]:
             "Regulatory best remaining score:",
             selection_stats["best_remaining_score"],
         )
-    return selected
+    return attach_priority_scores(selected, memory)
 
 
-def get_real_items() -> List[DigestItem]:
-    repo_items = fetch_github_repos()
-    news_items = fetch_news_items()
-    regulatory_items = fetch_regulatory_items()
+def get_real_items(memory: DigestMemory | None = None) -> List[DigestItem]:
+    memory = memory or load_digest_memory()
+    repo_items = fetch_github_repos(memory)
+    news_items = fetch_news_items(memory)
+    regulatory_items = fetch_regulatory_items(memory)
 
     print(
         "Final section counts:",

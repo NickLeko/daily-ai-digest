@@ -1,9 +1,11 @@
 from data import get_real_items
 from config import EMAIL_SUBJECT_PREFIX, MAX_ITEMS_PER_CATEGORY, REGULATORY_TARGET_ITEMS
-from summarize import summarize_items, summarize_top_insight
 from formatter import format_digest_html, validate_digest_items
 from emailer import send_email
+from memory import build_memory_snapshot, load_digest_memory, record_digest_items
+from scoring import build_top_picks
 from state import already_sent_today, local_now, mark_sent
+from summarize import summarize_digest_strategy, summarize_items
 
 
 def log(message: str) -> None:
@@ -18,8 +20,10 @@ def target_count_for_category(category: str) -> int:
 
 
 def main() -> None:
+    memory = load_digest_memory()
+
     log("Fetching real items...")
-    items = get_real_items()
+    items = get_real_items(memory)
 
     if not items:
         raise RuntimeError("No items fetched. Check feeds, API keys, or network.")
@@ -43,11 +47,21 @@ def main() -> None:
                 f"{count}/{target_count}. Fallback copy will render."
             )
 
-    log("Generating top insight...")
-    top_insight = summarize_top_insight(enriched_items)
+    log("Generating operator brief...")
+    digest_strategy = summarize_digest_strategy(
+        enriched_items,
+        build_memory_snapshot(memory),
+    )
+    top_insight = digest_strategy["top_insight"]
+    top_picks = build_top_picks(enriched_items)
 
     log("Formatting HTML email...")
-    html = format_digest_html(enriched_items, top_insight)
+    html = format_digest_html(
+        enriched_items,
+        top_insight,
+        top_picks=top_picks,
+        action_brief=digest_strategy,
+    )
 
     subject_prefix = f"{EMAIL_SUBJECT_PREFIX.strip()} " if EMAIL_SUBJECT_PREFIX.strip() else ""
     subject = f"{subject_prefix}Daily AI Digest - {local_now().strftime('%Y-%m-%d')}"
@@ -63,6 +77,7 @@ def main() -> None:
     log("Sending email...")
     send_email(subject, html)
     mark_sent([item.get("item_key", "") for item in items])
+    record_digest_items(enriched_items)
 
     log("Done. Check your inbox.")
 

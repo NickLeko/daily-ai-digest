@@ -2,7 +2,7 @@
 
 Personal healthcare AI intelligence automation for signal monitoring and prioritization.
 
-It pulls signals from GitHub, healthcare news, and FDA regulatory data, then uses LLMs to turn them into a concise daily briefing with summaries, priority scoring, and a synthesized top insight.
+It pulls signals from GitHub, healthcare news, and FDA/CMS/ONC regulatory data, then uses LLMs plus lightweight local memory to turn them into a concise daily briefing with summaries, personalized scoring, and an operator-focused top insight.
 
 ---
 
@@ -16,16 +16,17 @@ It pulls signals from GitHub, healthcare news, and FDA regulatory data, then use
 ### Processing
 - **LLM-based summarization:** (2-sentence summaries)
 - **Action-oriented "Why it matters" insights**
-- **Signal scoring:** (HIGH / MEDIUM / LOW)
-- **Cross-source synthesis:** → Top Insight
+- **Weighted personalization scoring:** career, build, content, regulatory, side-hustle, timeliness, novelty
+- **Repeat/theme awareness:** lightweight memory influences ranking over time
+- **Cross-source synthesis:** top picks, Top Insight, and compact operator moves
 
 ### Output
 - Clean HTML digest
 - Email delivery
-- Daily automated run (7:00 AM via `launchd`)
+- Daily automated run via **GitHub Actions**
 - Local artifact saved (`latest_digest.html`)
 - Duplicate-send protection for same-day reruns
-- Item history to avoid recycling the same stories and repos
+- File-based digest memory in `data/state/` to avoid recycling the same stories and track recurring themes
 
 ---
 
@@ -73,6 +74,11 @@ State is stored in `data/state/digest_state.json` so the app can:
 - skip a second send if the job runs again on the same local day
 - prefer items that were not already sent in recent digests
 
+Digest memory is stored in `data/state/digest_memory.json` so the app can:
+- track recurring themes and entities
+- score novelty and repeat signal
+- accumulate lightweight historical context without adding a database
+
 ---
 
 ## 🎯 Purpose
@@ -87,10 +93,10 @@ Built as a personal intelligence system to:
 ## 📌 Key Features
 
 - Multi-source data ingestion
+- Personalized scoring layer with centralized weights in `config.py`
 - LLM-based summarization + synthesis
-- Signal prioritization layer
-- Fully automated daily delivery
-- Local scheduling with `launchd`
+- Lightweight JSON memory for repeat detection and theme tracking
+- Fully automated daily delivery via GitHub Actions
 
 ---
 
@@ -115,5 +121,5 @@ Healthcare AI is moving from experimentation into real workflows. This project i
 
 - `.env` is excluded from version control.
 - Logs are saved locally in `log.txt` and `error.txt`.
-- If you use `launchd`, disable the scheduled GitHub Action or vice versa so you only have one scheduler.
+- `data/state/` is intentionally gitignored and cached by the workflow so runtime state can persist without adding new infrastructure.
 - Designed for extensibility (add new sources, filters, or scoring logic easily).
