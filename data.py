@@ -520,9 +520,11 @@ def select_scored_items(
     sent_item_keys: set[str],
     limit: int,
     memory: DigestMemory | None = None,
+    enforce_repo_generic_cap: bool = False,
+    excluded_reasons: Counter[str] | None = None,
 ) -> List[DigestItem]:
     scored = attach_priority_scores(items, memory, sort_items=False)
-    return sorted(
+    ranked = sorted(
         scored,
         key=lambda item: (
             item.get("item_key", "") not in sent_item_keys,
@@ -531,7 +533,30 @@ def select_scored_items(
             item.get("title", ""),
         ),
         reverse=True,
-    )[:limit]
+    )
+
+    if not enforce_repo_generic_cap:
+        return ranked[:limit]
+
+    selected: List[DigestItem] = []
+    generic_repo_count = 0
+
+    for item in ranked:
+        counts_toward_cap = bool(item.get("is_generic_devtool")) and not bool(
+            item.get("generic_repo_cap_exempt")
+        )
+        if counts_toward_cap and generic_repo_count >= 1:
+            if excluded_reasons is not None:
+                excluded_reasons["generic_repo_cap"] += 1
+            continue
+
+        selected.append(item)
+        if counts_toward_cap:
+            generic_repo_count += 1
+        if len(selected) >= limit:
+            break
+
+    return selected
 
 
 def fetch_github_repos(memory: DigestMemory | None = None) -> List[DigestItem]:
@@ -604,6 +629,8 @@ def fetch_github_repos(memory: DigestMemory | None = None) -> List[DigestItem]:
         sent_item_keys=sent_item_keys,
         limit=MAX_ITEMS_PER_CATEGORY,
         memory=memory,
+        enforce_repo_generic_cap=True,
+        excluded_reasons=excluded_reasons,
     )
     log_section_debug("Repos", len(raw_items), len(results), excluded_reasons, selected)
     return selected

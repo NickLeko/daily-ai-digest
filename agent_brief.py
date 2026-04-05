@@ -11,7 +11,7 @@ from config import (
     DIGEST_ANALYST_AGENT_TIMEOUT_SECONDS,
     PRIORITY_THEME_RULES,
 )
-from summarize import summarize_digest_strategy
+from summarize import summarize_digest_strategy, top_insight_is_specific
 
 
 PRIORITIES = [
@@ -42,6 +42,9 @@ Rules:
 - Keep sections distinct from each other
 - Avoid repeating the same thesis in multiple fields
 - No hype, no fluff, no generic AI summary language
+- Top insight must name one workflow wedge from the shortlist and the concrete operator implication
+- Prefer forms like "For prior auth, X matters because Y" or "PMs should prioritize Z over generic agent tooling"
+- Ban empty abstractions like "accelerate automation" or "AI is converging"
 - Prefer short sentences or sharp phrases
 - Keep top_insight to one sentence and roughly 15-30 words
 - Keep the other fields to one short sentence or phrase each
@@ -67,7 +70,10 @@ class DigestOperatorBrief:
         )
 
     def is_valid(self) -> bool:
-        return bool(self.normalized().top_insight)
+        normalized = self.normalized()
+        return bool(normalized.top_insight) and top_insight_is_specific(
+            normalized.top_insight
+        )
 
     def to_dict(self) -> Dict[str, str]:
         return asdict(self.normalized())
@@ -92,6 +98,17 @@ def compact_digest_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "summary": str(item.get("summary", "") or ""),
                 "why_it_matters": str(item.get("why_it_matters", "") or ""),
                 "signal": str(item.get("signal", "") or ""),
+                "workflow_wedges": [
+                    str(label).strip()
+                    for label in item.get("workflow_wedges", [])
+                    if str(label).strip()
+                ],
+                "operator_relevance": str(item.get("operator_relevance", "") or ""),
+                "near_term_actionability": str(
+                    item.get("near_term_actionability", "") or ""
+                ),
+                "is_generic_devtool": bool(item.get("is_generic_devtool")),
+                "generic_repo_cap_exempt": bool(item.get("generic_repo_cap_exempt")),
                 "priority_score": round(float(item.get("priority_score", 0.0) or 0.0), 2),
                 "objective_scores": {
                     str(key): round(float(value or 0.0), 2)

@@ -18,12 +18,13 @@ from data import (
     regulatory_bucket,
     regulatory_entry_matches_keywords,
     regulatory_relevance_result,
+    select_scored_items,
     select_regulatory_items,
 )
 from formatter import format_digest_html
 from memory import build_memory_snapshot
 from scoring import attach_priority_scores, build_top_picks
-from summarize import parse_json_payload
+from summarize import fallback_digest_strategy, parse_json_payload, top_insight_is_specific
 
 
 def render_item(category: str, title: str) -> dict[str, str]:
@@ -373,7 +374,7 @@ class AgentBriefTests(unittest.TestCase):
 
         brief = coerce_brief_output(
             {
-                "top_insight": "Focus on prior auth workflow ROI.",
+                "top_insight": "For prior auth, PMs should prioritize attachment exchange and denial-prep automation.",
                 "build_idea": "Denial summary copilot.",
             }
         )
@@ -381,7 +382,7 @@ class AgentBriefTests(unittest.TestCase):
         self.assertEqual(
             brief,
             DigestOperatorBrief(
-                top_insight="Focus on prior auth workflow ROI.",
+                top_insight="For prior auth, PMs should prioritize attachment exchange and denial-prep automation.",
                 content_angle="",
                 build_idea="Denial summary copilot.",
                 interview_talking_point="",
@@ -393,8 +394,8 @@ class AgentBriefTests(unittest.TestCase):
         with patch("agent_brief.DIGEST_ANALYST_AGENT_ENABLED", True), patch(
             "agent_brief._run_digest_analyst_agent_sync",
             return_value=DigestOperatorBrief(
-                top_insight="Operational AI wins where workflow pain is concrete.",
-                content_angle="Write about why workflow AI beats generic copilots.",
+                top_insight="For prior auth, the next wedge is audit-ready attachment exchange, so PMs should rank tools by denial lift and status visibility.",
+                content_angle="Why prior-auth workflow ROI beats generic copilots.",
             ),
         ):
             brief = build_agent_brief([render_item("News", "Signal")], {})
@@ -402,8 +403,8 @@ class AgentBriefTests(unittest.TestCase):
         self.assertEqual(
             brief,
             DigestOperatorBrief(
-                top_insight="Operational AI wins where workflow pain is concrete.",
-                content_angle="Write about why workflow AI beats generic copilots.",
+                top_insight="For prior auth, the next wedge is audit-ready attachment exchange, so PMs should rank tools by denial lift and status visibility.",
+                content_angle="Why prior-auth workflow ROI beats generic copilots.",
                 build_idea="",
                 interview_talking_point="",
                 watch_item="",
@@ -458,6 +459,36 @@ class PersonalizationScoringTests(unittest.TestCase):
             scored["score_dimensions"]["side_hustle_relevance"],
             3.0,
         )
+
+    def test_healthcare_workflow_repo_outranks_generic_agent_tooling(self) -> None:
+        now = datetime(2026, 4, 3, 15, 0, tzinfo=timezone.utc)
+        items = [
+            {
+                "category": "Repo",
+                "title": "acme/prior-auth-copilot",
+                "url": "https://example.com/repo/prior-auth",
+                "raw_text": "Prior authorization automation for claims attachments, payer status checks, and denial-prep workflows with FHIR audit trails.",
+                "item_key": "repo::prior-auth",
+                "published_at": now - timedelta(hours=2),
+                "source": "GitHub Search",
+            },
+            {
+                "category": "Repo",
+                "title": "acme/coding-agent-session-manager",
+                "url": "https://example.com/repo/coding-agent",
+                "raw_text": "Coding agent session manager and multi-agent orchestration framework with API wrappers for autonomous developer workflows.",
+                "item_key": "repo::coding-agent",
+                "published_at": now - timedelta(hours=1),
+                "source": "GitHub Search",
+            },
+        ]
+
+        scored = attach_priority_scores(items, {"version": 1, "events": []}, now=now)
+
+        self.assertEqual(scored[0]["title"], "acme/prior-auth-copilot")
+        self.assertFalse(scored[0]["is_generic_devtool"])
+        self.assertTrue(scored[1]["is_generic_devtool"])
+        self.assertGreater(scored[0]["priority_score"], scored[1]["priority_score"])
 
     def test_repeat_detection_lowers_novelty_but_keeps_theme_momentum(self) -> None:
         now = datetime(2026, 4, 3, 15, 0, tzinfo=timezone.utc)
@@ -550,6 +581,97 @@ class PersonalizationScoringTests(unittest.TestCase):
         self.assertTrue(
             all(pick["item"]["title"] == "Best Overall" for pick in picks)
         )
+
+    def test_repo_selection_caps_generic_devtools_when_healthcare_options_exist(self) -> None:
+        now = datetime(2026, 4, 3, 15, 0, tzinfo=timezone.utc)
+        items = [
+            {
+                "category": "Repo",
+                "title": "acme/prior-auth-copilot",
+                "url": "https://example.com/repo/prior-auth",
+                "raw_text": "Prior authorization workflow automation with attachment routing and denial-prep support.",
+                "item_key": "repo::prior-auth",
+                "published_at": now - timedelta(hours=2),
+                "source": "GitHub Search",
+            },
+            {
+                "category": "Repo",
+                "title": "acme/referral-intake-router",
+                "url": "https://example.com/repo/referral",
+                "raw_text": "Referral intake automation for missing documentation, eligibility checks, and routing handoffs.",
+                "item_key": "repo::referral",
+                "published_at": now - timedelta(hours=3),
+                "source": "GitHub Search",
+            },
+            {
+                "category": "Repo",
+                "title": "acme/multi-agent-starter",
+                "url": "https://example.com/repo/multi-agent",
+                "raw_text": "Multi-agent orchestration framework with API wrappers and task runners for autonomous developer workflows.",
+                "item_key": "repo::multi-agent",
+                "published_at": now - timedelta(hours=1),
+                "source": "GitHub Search",
+            },
+            {
+                "category": "Repo",
+                "title": "acme/coding-agent-session-manager",
+                "url": "https://example.com/repo/coding-agent",
+                "raw_text": "Coding agent session manager and developer CLI for autonomous code tasks.",
+                "item_key": "repo::coding-agent",
+                "published_at": now - timedelta(minutes=30),
+                "source": "GitHub Search",
+            },
+        ]
+
+        selected = select_scored_items(
+            items,
+            sent_item_keys=set(),
+            limit=3,
+            memory={"version": 1, "events": []},
+            enforce_repo_generic_cap=True,
+        )
+
+        selected_titles = [item["title"] for item in selected]
+
+        self.assertIn("acme/prior-auth-copilot", selected_titles)
+        self.assertIn("acme/referral-intake-router", selected_titles)
+        self.assertEqual(
+            sum(1 for item in selected if item["is_generic_devtool"]),
+            1,
+        )
+
+
+class DigestStrategyTests(unittest.TestCase):
+    def test_top_insight_validation_accepts_prior_authorization_wording(self) -> None:
+        self.assertTrue(
+            top_insight_is_specific(
+                "For prior authorization, PMs should rank attachment exchange bets by denial reduction and status visibility."
+            )
+        )
+
+    def test_fallback_digest_strategy_names_workflow_wedge_and_operator_implication(self) -> None:
+        strategy = fallback_digest_strategy(
+            [
+                {
+                    **render_item("Repo", "Prior Auth Signal"),
+                    "priority_score": 42.0,
+                    "workflow_wedges": ["prior auth"],
+                    "is_generic_devtool": False,
+                    "generic_repo_cap_exempt": False,
+                },
+                {
+                    **render_item("Repo", "Generic Agent Framework"),
+                    "priority_score": 35.0,
+                    "workflow_wedges": [],
+                    "is_generic_devtool": True,
+                    "generic_repo_cap_exempt": False,
+                },
+            ]
+        )
+
+        self.assertTrue(top_insight_is_specific(strategy["top_insight"]))
+        self.assertIn("prior auth", strategy["top_insight"].lower())
+        self.assertIn("generic agent tooling", strategy["top_insight"].lower())
 
 
 class RegulatorySelectionTests(unittest.TestCase):
