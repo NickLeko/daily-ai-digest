@@ -33,6 +33,36 @@ OBJECTIVE_LABELS = {
     "regulatory": "Top item for regulatory",
 }
 
+OBJECTIVE_DISPLAY_ORDER = ["career", "build", "content", "regulatory"]
+
+OBJECTIVE_EMPTY_MESSAGES = {
+    "career": "No high-signal career fit today.",
+    "build": "No high-signal build fit today.",
+    "content": "No strong content hook today.",
+    "regulatory": "No high-signal regulatory item today.",
+}
+
+OBJECTIVE_MIN_SCORE = {
+    "career": 5.8,
+    "build": 6.0,
+    "content": 5.4,
+    "regulatory": 6.2,
+}
+
+OBJECTIVE_REUSE_MARGIN = {
+    "career": 1.9,
+    "build": 1.6,
+    "content": 1.5,
+    "regulatory": 2.1,
+}
+
+OBJECTIVE_ORDER_RANK = {
+    "career": 0,
+    "content": 1,
+    "build": 2,
+    "regulatory": 3,
+}
+
 CATEGORY_BASELINES = {
     "Repo": {
         "build_relevance": 1.2,
@@ -843,30 +873,274 @@ def sort_items_by_priority(items: List[DigestItem]) -> List[DigestItem]:
     )
 
 
-def build_top_picks(items: List[DigestItem]) -> List[Dict[str, Any]]:
-    picks: List[Dict[str, Any]] = []
+def objective_score_value(item: DigestItem, objective: str) -> float:
+    return float((item.get("objective_scores", {}) or {}).get(objective, 0.0) or 0.0)
 
-    for objective, label in OBJECTIVE_LABELS.items():
-        ranked = sorted(
-            items,
-            key=lambda item: (
-                float((item.get("objective_scores", {}) or {}).get(objective, 0.0) or 0.0),
-                float(item.get("priority_score", 0.0) or 0.0),
-            ),
-            reverse=True,
+
+def dimension_score_value(
+    item: DigestItem,
+    dimension: str,
+    *,
+    fallback_objective: str | None = None,
+) -> float:
+    dimensions = item.get("score_dimensions", {}) or {}
+    if dimension in dimensions:
+        return float(dimensions.get(dimension, 0.0) or 0.0)
+    if not fallback_objective:
+        return 0.0
+    return objective_score_value(item, fallback_objective)
+
+
+def item_identifier(item: DigestItem) -> str:
+    return str(
+        item.get("item_key")
+        or item.get("url")
+        or item.get("id")
+        or item.get("title")
+        or ""
+    )
+
+
+def has_workflow_signal(item: DigestItem) -> bool:
+    return bool(item.get("workflow_wedges")) or bool(
+        item.get("explicit_interoperability_reimbursement")
+    )
+
+
+def is_generic_background_item(item: DigestItem) -> bool:
+    return bool(item.get("is_generic_devtool")) and not bool(
+        item.get("generic_repo_cap_exempt")
+    )
+
+
+def item_is_eligible_for_objective(item: DigestItem, objective: str) -> bool:
+    objective_score = objective_score_value(item, objective)
+    if objective_score < OBJECTIVE_MIN_SCORE[objective]:
+        return False
+
+    category = str(item.get("category", "") or "")
+    operator_relevance = str(item.get("operator_relevance", "low") or "low")
+    actionability = str(item.get("near_term_actionability", "low") or "low")
+    workflow_signal = has_workflow_signal(item)
+    build_score = dimension_score_value(item, "build_relevance", fallback_objective="build")
+    career_score = dimension_score_value(item, "career_relevance", fallback_objective="career")
+    content_score = dimension_score_value(item, "content_potential", fallback_objective="content")
+    regulatory_score = dimension_score_value(
+        item,
+        "regulatory_significance",
+        fallback_objective="regulatory",
+    )
+    generic_background = is_generic_background_item(item)
+    explicit_healthcare_context = bool(item.get("explicit_healthcare_context"))
+
+    if objective == "regulatory":
+        return category == "Regulatory" and regulatory_score >= 3.0
+
+    if objective == "career":
+        if category == "Repo":
+            return (
+                explicit_healthcare_context
+                and operator_relevance == "high"
+                and (workflow_signal or actionability == "high")
+                and objective_score >= OBJECTIVE_MIN_SCORE["career"] + 0.7
+            )
+        return (
+            category in {"News", "Regulatory"}
+            and (
+                (
+                    career_score >= 2.8
+                    and (
+                        operator_relevance in {"high", "medium"}
+                        or actionability in {"high", "medium"}
+                        or workflow_signal
+                    )
+                )
+                or objective_score >= OBJECTIVE_MIN_SCORE["career"] + 1.2
+            )
         )
 
-        choice = ranked[0] if ranked else None
+    if objective == "build":
+        if generic_background and build_score < 4.0:
+            return False
+        return build_score >= 3.0 and (
+            category == "Repo"
+            or operator_relevance in {"high", "medium"}
+            or actionability in {"high", "medium"}
+            or workflow_signal
+            or objective_score >= OBJECTIVE_MIN_SCORE["build"] + 1.0
+        )
+
+    if objective == "content":
+        if generic_background and content_score < 3.4:
+            return False
+        return content_score >= 2.3 and (
+            category in {"News", "Regulatory"}
+            or workflow_signal
+            or operator_relevance in {"high", "medium"}
+            or actionability in {"high", "medium"}
+            or objective_score >= OBJECTIVE_MIN_SCORE["content"] + 1.0
+        )
+
+    return False
+
+
+def objective_fit_bonus(item: DigestItem, objective: str) -> float:
+    category = str(item.get("category", "") or "")
+    operator_relevance = str(item.get("operator_relevance", "low") or "low")
+    actionability = str(item.get("near_term_actionability", "low") or "low")
+    workflow_signal = has_workflow_signal(item)
+    generic_background = is_generic_background_item(item)
+
+    bonus = 0.0
+    if objective == "career":
+        if category == "News":
+            bonus += 0.7
+        elif category == "Regulatory":
+            bonus += 0.45
+        elif category == "Repo":
+            bonus -= 0.55
+        if operator_relevance == "high":
+            bonus += 0.25
+        if actionability == "high":
+            bonus += 0.15
+    elif objective == "build":
+        if category == "Repo":
+            bonus += 0.8
+        if operator_relevance == "high":
+            bonus += 0.35
+        if actionability == "high":
+            bonus += 0.35
+        if workflow_signal:
+            bonus += 0.25
+    elif objective == "content":
+        if category == "News":
+            bonus += 0.55
+        elif category == "Regulatory":
+            bonus += 0.25
+        if workflow_signal:
+            bonus += 0.25
+        if actionability in {"high", "medium"}:
+            bonus += 0.15
+    elif objective == "regulatory":
+        if bool(item.get("explicit_interoperability_reimbursement")):
+            bonus += 0.5
+        if actionability == "high":
+            bonus += 0.3
+        if operator_relevance in {"high", "medium"}:
+            bonus += 0.2
+
+    if generic_background:
+        bonus -= 0.6
+
+    return round(bonus, 2)
+
+
+def objective_selection_score(item: DigestItem, objective: str) -> float:
+    return round(
+        objective_score_value(item, objective) + objective_fit_bonus(item, objective),
+        2,
+    )
+
+
+def rank_objective_candidates(items: List[DigestItem], objective: str) -> List[DigestItem]:
+    eligible = [item for item in items if item_is_eligible_for_objective(item, objective)]
+    return sorted(
+        eligible,
+        key=lambda item: (
+            objective_selection_score(item, objective),
+            objective_score_value(item, objective),
+            float(item.get("priority_score", 0.0) or 0.0),
+            item.get("published_at") or datetime.min.replace(tzinfo=timezone.utc),
+            item.get("title", ""),
+        ),
+        reverse=True,
+    )
+
+
+def objective_selection_order(
+    candidates_by_objective: Dict[str, List[DigestItem]]
+) -> List[str]:
+    non_regulatory = sorted(
+        [objective for objective in OBJECTIVE_DISPLAY_ORDER if objective != "regulatory"],
+        key=lambda objective: (
+            len(candidates_by_objective.get(objective, [])),
+            OBJECTIVE_ORDER_RANK[objective],
+        ),
+    )
+    return ["regulatory", *non_regulatory]
+
+
+def choose_candidate_for_objective(
+    candidates: List[DigestItem],
+    objective: str,
+    used_item_keys: set[str],
+) -> DigestItem | None:
+    if not candidates:
+        return None
+
+    best_candidate = candidates[0]
+    best_unused = next(
+        (
+            item
+            for item in candidates
+            if item_identifier(item) not in used_item_keys
+        ),
+        None,
+    )
+
+    if not best_unused:
+        return best_candidate
+
+    if item_identifier(best_candidate) not in used_item_keys:
+        return best_candidate
+
+    best_score = objective_selection_score(best_candidate, objective)
+    best_unused_score = objective_selection_score(best_unused, objective)
+    if best_score - best_unused_score >= OBJECTIVE_REUSE_MARGIN[objective]:
+        return best_candidate
+
+    return best_unused
+
+
+def empty_objective_pick(objective: str) -> Dict[str, Any]:
+    return {
+        "objective": objective,
+        "label": OBJECTIVE_LABELS[objective],
+        "item": None,
+        "score": 0.0,
+        "message": OBJECTIVE_EMPTY_MESSAGES[objective],
+        "empty": True,
+    }
+
+
+def build_top_picks(items: List[DigestItem]) -> List[Dict[str, Any]]:
+    candidates_by_objective = {
+        objective: rank_objective_candidates(items, objective)
+        for objective in OBJECTIVE_DISPLAY_ORDER
+    }
+    picks_by_objective: Dict[str, Dict[str, Any]] = {
+        objective: empty_objective_pick(objective)
+        for objective in OBJECTIVE_DISPLAY_ORDER
+    }
+    used_item_keys: set[str] = set()
+
+    for objective in objective_selection_order(candidates_by_objective):
+        choice = choose_candidate_for_objective(
+            candidates_by_objective.get(objective, []),
+            objective,
+            used_item_keys,
+        )
         if not choice:
             continue
 
-        picks.append(
-            {
-                "objective": objective,
-                "label": label,
-                "item": choice,
-                "score": float((choice.get("objective_scores", {}) or {}).get(objective, 0.0) or 0.0),
-            }
-        )
+        picks_by_objective[objective] = {
+            "objective": objective,
+            "label": OBJECTIVE_LABELS[objective],
+            "item": choice,
+            "score": objective_score_value(choice, objective),
+            "message": "",
+            "empty": False,
+        }
+        used_item_keys.add(item_identifier(choice))
 
-    return picks
+    return [picks_by_objective[objective] for objective in OBJECTIVE_DISPLAY_ORDER]

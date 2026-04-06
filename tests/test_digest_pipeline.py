@@ -24,7 +24,14 @@ from data import (
 from formatter import format_digest_html
 from memory import build_memory_snapshot
 from scoring import attach_priority_scores, build_top_picks
-from summarize import fallback_digest_strategy, parse_json_payload, top_insight_is_specific
+from summarize import (
+    fallback_digest_strategy,
+    fallback_why_it_matters,
+    parse_json_payload,
+    summarize_items,
+    top_insight_is_specific,
+    why_it_matters_is_specific,
+)
 
 
 def render_item(category: str, title: str) -> dict[str, str]:
@@ -179,6 +186,26 @@ class FormatterTests(unittest.TestCase):
         self.assertIn("Top item for career", html)
         self.assertIn("OPERATOR MOVES", html)
         self.assertIn("Build idea:", html)
+
+    def test_top_picks_render_empty_slot_message(self) -> None:
+        html = format_digest_html(
+            [render_item("News", "News One")],
+            "Insight",
+            top_picks=[
+                {
+                    "objective": "regulatory",
+                    "label": "Top item for regulatory",
+                    "item": None,
+                    "score": 0.0,
+                    "message": "No high-signal regulatory item today.",
+                    "empty": True,
+                }
+            ],
+        )
+
+        self.assertIn("Top item for regulatory", html)
+        self.assertIn("No high-signal regulatory item today.", html)
+        self.assertNotIn('href="#"', html)
 
     def test_formatter_escapes_dynamic_html_content(self) -> None:
         html = format_digest_html(
@@ -547,22 +574,121 @@ class PersonalizationScoringTests(unittest.TestCase):
 
         self.assertEqual(snapshot["top_themes"][0]["theme"], "agents_workflows")
 
-    def test_top_picks_can_reuse_the_same_best_item(self) -> None:
-        item = {
-            **render_item("News", "Best Overall"),
-            "priority_score": 50.0,
-            "objective_scores": {
-                "career": 9.0,
-                "build": 8.5,
-                "content": 9.1,
-                "regulatory": 8.8,
-            },
-            "item_key": "news::best-overall",
-        }
-
+    def test_top_picks_do_not_backfill_regulatory_with_non_regulatory_items(self) -> None:
         picks = build_top_picks(
             [
-                item,
+                {
+                    **render_item("News", "News Winner"),
+                    "priority_score": 50.0,
+                    "objective_scores": {
+                        "career": 8.5,
+                        "build": 7.9,
+                        "content": 8.2,
+                        "regulatory": 9.4,
+                    },
+                    "item_key": "news::winner",
+                },
+                {
+                    **render_item("Repo", "Repo Builder"),
+                    "priority_score": 42.0,
+                    "objective_scores": {
+                        "career": 3.5,
+                        "build": 8.1,
+                        "content": 4.2,
+                        "regulatory": 1.0,
+                    },
+                    "item_key": "repo::builder",
+                },
+            ]
+        )
+
+        regulatory_pick = next(
+            pick for pick in picks if pick["objective"] == "regulatory"
+        )
+
+        self.assertIsNone(regulatory_pick["item"])
+        self.assertTrue(regulatory_pick["empty"])
+        self.assertEqual(
+            regulatory_pick["message"],
+            "No high-signal regulatory item today.",
+        )
+
+    def test_top_picks_prefer_distinct_items_when_alternatives_exist(self) -> None:
+        picks = build_top_picks(
+            [
+                {
+                    **render_item("News", "Career Signal"),
+                    "priority_score": 50.0,
+                    "objective_scores": {
+                        "career": 9.0,
+                        "build": 8.7,
+                        "content": 8.9,
+                        "regulatory": 3.0,
+                    },
+                    "item_key": "news::career",
+                },
+                {
+                    **render_item("Repo", "Build Signal"),
+                    "priority_score": 46.0,
+                    "objective_scores": {
+                        "career": 3.0,
+                        "build": 8.3,
+                        "content": 4.8,
+                        "regulatory": 1.0,
+                    },
+                    "item_key": "repo::build",
+                },
+                {
+                    **render_item("News", "Content Signal"),
+                    "priority_score": 43.0,
+                    "objective_scores": {
+                        "career": 5.2,
+                        "build": 4.0,
+                        "content": 8.1,
+                        "regulatory": 2.0,
+                    },
+                    "item_key": "news::content",
+                },
+                {
+                    **render_item("Regulatory", "Regulatory Signal"),
+                    "priority_score": 40.0,
+                    "objective_scores": {
+                        "career": 5.6,
+                        "build": 4.6,
+                        "content": 5.1,
+                        "regulatory": 8.8,
+                    },
+                    "item_key": "reg::signal",
+                },
+            ]
+        )
+
+        selected_titles = {
+            pick["objective"]: pick["item"]["title"]
+            for pick in picks
+            if pick["item"] is not None
+        }
+
+        self.assertEqual(selected_titles["career"], "Career Signal")
+        self.assertEqual(selected_titles["build"], "Build Signal")
+        self.assertEqual(selected_titles["content"], "Content Signal")
+        self.assertEqual(selected_titles["regulatory"], "Regulatory Signal")
+        self.assertEqual(len(set(selected_titles.values())), 4)
+
+    def test_top_picks_can_reuse_item_when_no_valid_alternative_exists(self) -> None:
+        picks = build_top_picks(
+            [
+                {
+                    **render_item("News", "Best Overall"),
+                    "priority_score": 50.0,
+                    "objective_scores": {
+                        "career": 9.0,
+                        "build": 8.5,
+                        "content": 9.1,
+                        "regulatory": 2.0,
+                    },
+                    "item_key": "news::best-overall",
+                },
                 {
                     **render_item("Repo", "Second Best"),
                     "priority_score": 40.0,
@@ -570,17 +696,22 @@ class PersonalizationScoringTests(unittest.TestCase):
                         "career": 5.0,
                         "build": 7.0,
                         "content": 4.0,
-                        "regulatory": 2.0,
+                        "regulatory": 1.0,
                     },
                     "item_key": "repo::second-best",
                 },
             ]
         )
 
-        self.assertEqual(len(picks), 4)
-        self.assertTrue(
-            all(pick["item"]["title"] == "Best Overall" for pick in picks)
-        )
+        selected_titles = {
+            pick["objective"]: (pick["item"] or {}).get("title")
+            for pick in picks
+        }
+
+        self.assertEqual(selected_titles["career"], "Best Overall")
+        self.assertEqual(selected_titles["build"], "Second Best")
+        self.assertEqual(selected_titles["content"], "Best Overall")
+        self.assertIsNone(selected_titles["regulatory"])
 
     def test_repo_selection_caps_generic_devtools_when_healthcare_options_exist(self) -> None:
         now = datetime(2026, 4, 3, 15, 0, tzinfo=timezone.utc)
@@ -672,6 +803,79 @@ class DigestStrategyTests(unittest.TestCase):
         self.assertTrue(top_insight_is_specific(strategy["top_insight"]))
         self.assertIn("prior auth", strategy["top_insight"].lower())
         self.assertIn("generic agent tooling", strategy["top_insight"].lower())
+
+
+class WhyItMattersTests(unittest.TestCase):
+    def test_fallback_why_it_matters_is_specific_and_category_aware(self) -> None:
+        repo_text = fallback_why_it_matters(
+            {
+                **render_item("Repo", "Prior Auth Copilot"),
+                "raw_text": "Prior authorization workflow automation with claims attachments and payer status checks.",
+                "workflow_wedges": ["prior auth"],
+            }
+        )
+        news_text = fallback_why_it_matters(
+            {
+                **render_item("News", "Referral Launch"),
+                "raw_text": "New referral intake launch for routing, eligibility, and intake operations across provider groups.",
+                "workflow_wedges": ["referral/intake"],
+            }
+        )
+        regulatory_text = fallback_why_it_matters(
+            {
+                **render_item("Regulatory", "CMS Claims Attachments Rule"),
+                "raw_text": "CMS final rule for claims attachments and electronic signatures.",
+                "workflow_wedges": ["RCM/denials"],
+            }
+        )
+
+        self.assertTrue(why_it_matters_is_specific(repo_text))
+        self.assertTrue(why_it_matters_is_specific(news_text))
+        self.assertTrue(why_it_matters_is_specific(regulatory_text))
+        self.assertIn("real pilot", repo_text.lower())
+        self.assertIn("live market signal", news_text.lower())
+        self.assertIn("update", regulatory_text.lower())
+
+    def test_summarize_items_replaces_repeated_generic_why_it_matters_with_distinct_fallbacks(self) -> None:
+        response = type(
+            "Response",
+            (),
+            {
+                "output_text": (
+                    '{"summary":"Two short sentences. Still two sentences.",'
+                    '"why_it_matters":"Affects workflow; teams should prioritize it soon.",'
+                    '"signal":"high"}'
+                )
+            },
+        )()
+        items = [
+            {
+                **render_item("Repo", "Prior Auth Copilot"),
+                "raw_text": "Prior authorization repo with claims attachments and payer status checks.",
+                "workflow_wedges": ["prior auth"],
+            },
+            {
+                **render_item("News", "Referral Launch"),
+                "raw_text": "Referral intake launch for routing and eligibility operations.",
+                "workflow_wedges": ["referral/intake"],
+            },
+            {
+                **render_item("Regulatory", "CMS Claims Attachments Rule"),
+                "raw_text": "CMS final rule for claims attachments and electronic signatures.",
+                "workflow_wedges": ["RCM/denials"],
+            },
+        ]
+
+        with patch("summarize.client.responses.create", return_value=response):
+            summarized = summarize_items(items)
+
+        why_lines = [item["why_it_matters"] for item in summarized]
+
+        self.assertEqual(len(set(why_lines)), 3)
+        self.assertTrue(all(why_it_matters_is_specific(line) for line in why_lines))
+        self.assertIn("real pilot", why_lines[0].lower())
+        self.assertIn("live market signal", why_lines[1].lower())
+        self.assertIn("next 30 days", why_lines[2].lower())
 
 
 class RegulatorySelectionTests(unittest.TestCase):

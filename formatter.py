@@ -111,6 +111,16 @@ def render_top_picks(top_picks: List[Dict[str, object]] | None) -> str:
     rows = []
     for pick in top_picks:
         item = pick.get("item", {}) or {}
+        if pick.get("empty") or not item:
+            rows.append(
+                f"""
+                <p style="margin: 0 0 8px 0;">
+                  <strong>{escaped(pick.get('label', 'Top pick'))}:</strong>
+                  <span style="color: #555;">{escaped(pick.get('message', 'No qualifying item today.'))}</span>
+                </p>
+                """
+            )
+            continue
         rows.append(
             f"""
             <p style="margin: 0 0 8px 0;">

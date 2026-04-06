@@ -166,6 +166,9 @@ GENERIC_WHY_IT_MATTERS_PHRASES = [
     "enables teams",
     "allows teams",
     "healthcare ai pms should consider",
+    "compress manual work and handoff delay",
+    "next planning cycle",
+    "near-term roadmap impact",
 ]
 
 ACTION_WORDS = [
@@ -178,7 +181,121 @@ ACTION_WORDS = [
     "deprioritize",
     "tie",
     "plan",
+    "audit",
+    "review",
+    "validate",
+    "inventory",
+    "decide",
+    "check",
 ]
+
+ACTOR_KEYWORDS = [
+    "manager",
+    "managers",
+    "lead",
+    "leads",
+    "leader",
+    "leaders",
+    "owner",
+    "owners",
+    "director",
+    "directors",
+    "supervisor",
+    "supervisors",
+    "builder",
+    "builders",
+    "integration",
+    "integrations",
+    "compliance",
+    "ops",
+    "rcm",
+    "denials",
+    "payer",
+    "provider",
+    "access",
+    "informatics",
+]
+
+TIMEFRAME_KEYWORDS = [
+    "next 7",
+    "next 30",
+    "next month",
+    "this month",
+    "next sprint",
+    "over the next",
+    "in the next",
+    "before the next",
+    "coming weeks",
+    "current implementation",
+    "billing cycle",
+    "roadmap check-in",
+]
+
+OPERATING_DETAIL_RULES = [
+    ("claims attachment exchange", ["claims attachments", "attachment exchange"]),
+    ("electronic signatures", ["electronic signatures", "e-signature", "esignature"]),
+    ("payer status checks", ["status visibility", "status checks", "payer status"]),
+    ("referral routing", ["referral routing", "referral management", "referral"]),
+    ("intake completeness", ["intake", "eligibility", "benefits verification"]),
+    ("visit documentation handoffs", ["documentation", "ambient", "scribe", "charting", "clinical note"]),
+    ("open-slot recovery", ["scheduling", "appointment", "reschedule", "capacity"]),
+    ("denial and appeal prep", ["denials", "denial", "appeals", "appeal"]),
+    ("FHIR and API handoffs", ["fhir", "api", "apis", "interoperability", "tefca", "uscdi"]),
+    ("fax and forms queues", ["fax", "forms", "snail mail"]),
+    ("back-office inbox work", ["inbox", "back office", "contact center", "call center"]),
+    ("follow-up closure", ["care coordination", "follow-up", "discharge", "transition of care"]),
+]
+
+WORKFLOW_SPECIFIC_ACTIONS = {
+    "prior auth": {
+        "actors": "prior-auth managers, denials leads, and integration owners",
+        "repo_action": "reduce documentation assembly, payer rules lookup, and status chasing",
+        "news_action": "audit where evidence packets, payer rules, or status updates still break the workflow",
+        "regulatory_action": "map attachment, signature, and audit-trail gaps",
+    },
+    "referral/intake": {
+        "actors": "access directors, intake supervisors, and referral owners",
+        "repo_action": "cut missing-document rework, manual routing, and referral leakage",
+        "news_action": "review intake completeness, routing errors, and time-to-scheduled-visit",
+        "regulatory_action": "check intake data capture and referral-routing controls",
+    },
+    "documentation/ambient": {
+        "actors": "clinical informatics leads and provider-ops owners",
+        "repo_action": "turn visit context into usable downstream tasks instead of another note layer",
+        "news_action": "check whether note capture improves coding, follow-up, or inbox handoffs",
+        "regulatory_action": "review clinician review, retention, and downstream audit controls",
+    },
+    "scheduling": {
+        "actors": "access-center managers and patient-access owners",
+        "repo_action": "improve fill rate, template utilization, and reschedule recovery",
+        "news_action": "review hold times, open capacity, and preventable reschedules",
+        "regulatory_action": "check whether scheduling data capture or reporting obligations changed",
+    },
+    "RCM/denials": {
+        "actors": "RCM directors, denials leads, and appeals managers",
+        "repo_action": "speed evidence retrieval, denial triage, and appeal prep",
+        "news_action": "review avoidable denials, write-offs, and queue turnaround",
+        "regulatory_action": "map policy changes to claims, attachments, and appeal workflows",
+    },
+    "interoperability": {
+        "actors": "integration leads and health IT owners",
+        "repo_action": "reduce custom interface work while preserving an audit trail",
+        "news_action": "inventory FHIR/API dependencies and brittle handoffs on active roadmap work",
+        "regulatory_action": "map API, payload, and audit-trail gaps before trading-partner work starts",
+    },
+    "provider/admin ops": {
+        "actors": "ops managers and back-office leads",
+        "repo_action": "shrink inbox, forms, or contact-center handoffs on a live queue",
+        "news_action": "review which back-office queues still depend on manual triage and status chasing",
+        "regulatory_action": "check whether reporting, forms handling, or audit obligations changed",
+    },
+    "care coordination": {
+        "actors": "care-management leads and referral owners",
+        "repo_action": "close referral loops and follow-up gaps instead of creating another task list",
+        "news_action": "review dropped transitions, missed follow-ups, and outreach backlog",
+        "regulatory_action": "map documentation or reporting changes to discharge and follow-up workflows",
+    },
+}
 
 
 def parse_json_payload(text: str) -> Dict[str, str] | None:
@@ -262,6 +379,82 @@ def workflow_guidance_for_item(item: Dict[str, object]) -> Dict[str, str]:
     return WORKFLOW_OPERATOR_GUIDANCE["provider/admin ops"]
 
 
+def workflow_actions_for_item(item: Dict[str, object]) -> Dict[str, str]:
+    wedges = infer_workflow_wedges(item)
+    if wedges:
+        return WORKFLOW_SPECIFIC_ACTIONS.get(
+            wedges[0],
+            WORKFLOW_SPECIFIC_ACTIONS["provider/admin ops"],
+        )
+    return WORKFLOW_SPECIFIC_ACTIONS["provider/admin ops"]
+
+
+def sentence_start(text: str) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    return value[0].upper() + value[1:]
+
+
+def item_detail_phrase(item: Dict[str, object]) -> str:
+    text = item_text_blob(item).lower()
+    details: List[str] = []
+    for label, keywords in OPERATING_DETAIL_RULES:
+        if any(keyword in text for keyword in keywords):
+            details.append(label)
+        if len(details) == 2:
+            break
+
+    if not details:
+        return ""
+    if len(details) == 1:
+        return details[0]
+    return f"{details[0]} and {details[1]}"
+
+
+def item_has_policy_signal(item: Dict[str, object]) -> bool:
+    text = item_text_blob(item).lower()
+    return any(
+        keyword in text
+        for keyword in [
+            "policy",
+            "rule",
+            "guidance",
+            "cms",
+            "fda",
+            "onc",
+            "compliance",
+            "reimbursement",
+        ]
+    )
+
+
+def item_has_market_signal(item: Dict[str, object]) -> bool:
+    text = item_text_blob(item).lower()
+    return any(
+        keyword in text
+        for keyword in [
+            "launch",
+            "launched",
+            "pilot",
+            "deployment",
+            "deployed",
+            "partnership",
+            "customer",
+            "health system",
+            "rollout",
+        ]
+    )
+
+
+def detail_suffix(base_action: str, detail: str) -> str:
+    if not detail:
+        return ""
+    if detail.lower() in base_action.lower():
+        return ""
+    return f" around {detail}"
+
+
 def why_it_matters_is_specific(text: str) -> bool:
     lowered = (text or "").strip().lower()
     if not lowered:
@@ -286,7 +479,9 @@ def why_it_matters_is_specific(text: str) -> bool:
         ]
     )
     mentions_action = any(word in lowered for word in ACTION_WORDS)
-    return mentions_workflow and mentions_action
+    mentions_actor = any(keyword in lowered for keyword in ACTOR_KEYWORDS)
+    mentions_timeframe = any(keyword in lowered for keyword in TIMEFRAME_KEYWORDS)
+    return mentions_workflow and mentions_action and mentions_actor and mentions_timeframe
 
 
 def top_insight_is_specific(text: str) -> bool:
@@ -341,16 +536,39 @@ def fallback_summary(item: Dict[str, object]) -> str:
 
 def fallback_why_it_matters(item: Dict[str, object]) -> str:
     guidance = workflow_guidance_for_item(item)
+    workflow_actions = workflow_actions_for_item(item)
+    detail = item_detail_phrase(item)
+    detail_tail = detail_suffix(workflow_actions["news_action"], detail)
     if item.get("category") == "Regulatory":
+        regulatory_tail = detail_suffix(workflow_actions["regulatory_action"], detail)
         return (
-            f"Affects {guidance['workflow']}; {guidance['audience']} should map this to roadmap, integration, or compliance work in the next planning cycle."
+            f"{sentence_start(workflow_actions['actors'])} should use this update to "
+            f"{workflow_actions['regulatory_action']}{regulatory_tail} over the next 30 days."
         )
     if item.get("is_generic_devtool") and not item.get("generic_repo_cap_exempt"):
         return (
-            f"Background infra for {guidance['workflow']}; only track it if you can tie it to a real operator workflow in the next 7 to 30 days."
+            f"Only relevant if you can attach it to a live {guidance['workflow']} workflow; "
+            f"builders should pressure-test integration burden and governance fit in the next sprint."
+        )
+    if item.get("category") == "Repo":
+        repo_tail = detail_suffix(workflow_actions["repo_action"], detail)
+        return (
+            f"For builders targeting {guidance['workflow']}, the question is whether this can "
+            f"{workflow_actions['repo_action']}{repo_tail} during a real pilot in the next 30 days."
+        )
+    if item_has_policy_signal(item):
+        return (
+            f"This changes the operating checklist for {guidance['workflow']}: "
+            f"{workflow_actions['actors']} should {workflow_actions['news_action']}{detail_tail} before the next roadmap check-in."
+        )
+    if item_has_market_signal(item):
+        return (
+            f"If you own {guidance['workflow']}, treat this as a live market signal and use the next 30 days to "
+            f"{workflow_actions['news_action']}{detail_tail}; {workflow_actions['actors']} will feel it first."
         )
     return (
-        f"Affects {guidance['workflow']}; {guidance['audience']} should {guidance['action']} in the next 7 to 30 days."
+        f"{sentence_start(workflow_actions['actors'])} should treat this as a live signal in {guidance['workflow']} "
+        f"and {workflow_actions['news_action']}{detail_tail} over the next month."
     )
 
 
@@ -435,7 +653,10 @@ Rules:
 - Avoid generic phrases like "this enables", "this helps", "this allows"
 - Write like an operator summarizing for speed and decision-making
 - "why_it_matters" must name the workflow affected, who cares, and the action or implication in the next 7 to 30 days
-- Prefer forms like "Affects X; Y should Z"
+- Name a concrete operator group such as prior-auth managers, integration leads, access-center owners, denials leads, or clinical informatics
+- Mention a practical next step such as an audit, pilot decision, backlog review, integration check, or compliance task
+- Make repo, news, and regulatory items sound different when the evidence differs
+- Do not reuse the same sentence shell across items
 - Avoid empty abstractions like "accelerate automation", "unlock value", or "future of AI"
 - "signal" must be one of: high, medium, low
 - Use "high" only for items with strong practical importance right now
