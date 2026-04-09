@@ -5,4 +5,6 @@ __pycache__/
 log.txt
 error.txt
 latest_digest.html
+latest_operator_brief.json
+latest_operator_cockpit.html
 data/state/

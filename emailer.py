@@ -6,6 +6,11 @@ from config import GMAIL_ADDRESS, GMAIL_APP_PASSWORD, TO_EMAIL
 
 
 def send_email(subject: str, html_body: str) -> None:
+    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD or not TO_EMAIL:
+        raise RuntimeError(
+            "Email configuration is incomplete. Set GMAIL_ADDRESS, GMAIL_APP_PASSWORD, and TO_EMAIL before sending."
+        )
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = GMAIL_ADDRESS

@@ -1,0 +1,118 @@
+{
+  "default": {
+    "score": 60,
+    "label": "Medium",
+    "reason": "Unclassified source; use it as directional evidence until corroborated."
+  },
+  "suffix_rules": {
+    ".gov": {
+      "score": 95,
+      "label": "High",
+      "reason": "Official government or regulatory source."
+    }
+  },
+  "domain_rules": {
+    "github.com": {
+      "score": 88,
+      "label": "High",
+      "reason": "Primary repository, release, or project source."
+    },
+    "cms.gov": {
+      "score": 97,
+      "label": "High",
+      "reason": "Official CMS source."
+    },
+    "fda.gov": {
+      "score": 97,
+      "label": "High",
+      "reason": "Official FDA source."
+    },
+    "healthit.gov": {
+      "score": 95,
+      "label": "High",
+      "reason": "Official ASTP/ONC source."
+    },
+    "hhs.gov": {
+      "score": 95,
+      "label": "High",
+      "reason": "Official HHS source."
+    },
+    "healthcareitnews.com": {
+      "score": 72,
+      "label": "Medium",
+      "reason": "Trade publication with regular original reporting."
+    },
+    "mobihealthnews.com": {
+      "score": 70,
+      "label": "Medium",
+      "reason": "Trade publication with useful but not primary reporting."
+    },
+    "prnewswire.com": {
+      "score": 42,
+      "label": "Low",
+      "reason": "Press release distribution, not independent reporting."
+    },
+    "businesswire.com": {
+      "score": 42,
+      "label": "Low",
+      "reason": "Press release distribution, not independent reporting."
+    },
+    "globenewswire.com": {
+      "score": 40,
+      "label": "Low",
+      "reason": "Press release distribution, not independent reporting."
+    },
+    "substack.com": {
+      "score": 38,
+      "label": "Low",
+      "reason": "Newsletter platform; useful for commentary, weaker as primary evidence."
+    },
+    "medium.com": {
+      "score": 35,
+      "label": "Low",
+      "reason": "Opinion or personal-publishing platform; treat as directional."
+    },
+    "linkedin.com": {
+      "score": 30,
+      "label": "Low",
+      "reason": "Social post, not independent reporting."
+    },
+    "x.com": {
+      "score": 25,
+      "label": "Low",
+      "reason": "Social post, not independent reporting."
+    },
+    "twitter.com": {
+      "score": 25,
+      "label": "Low",
+      "reason": "Social post, not independent reporting."
+    }
+  },
+  "source_name_rules": {
+    "openFDA Device Enforcement": {
+      "score": 97,
+      "label": "High",
+      "reason": "Primary FDA enforcement dataset."
+    },
+    "openFDA Drug Enforcement": {
+      "score": 97,
+      "label": "High",
+      "reason": "Primary FDA enforcement dataset."
+    },
+    "FDA Press Releases": {
+      "score": 94,
+      "label": "High",
+      "reason": "Official FDA communication."
+    },
+    "CMS Newsroom": {
+      "score": 95,
+      "label": "High",
+      "reason": "Official CMS communication."
+    },
+    "ASTP/ONC Blog": {
+      "score": 92,
+      "label": "High",
+      "reason": "Official ASTP/ONC communication."
+    }
+  }
+}

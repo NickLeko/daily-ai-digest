@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from zoneinfo import ZoneInfo
 
 from config import (
+    BRIEF_HISTORY_MAX_DAYS,
     DIGEST_MEMORY_FILE_PATH,
     HISTORY_CONTEXT_WINDOW_DAYS,
     HISTORY_MAX_EVENTS,
@@ -23,8 +24,9 @@ MEMORY_PATH = Path(DIGEST_MEMORY_FILE_PATH)
 
 def _default_memory() -> DigestMemory:
     return {
-        "version": 1,
+        "version": 2,
         "events": [],
+        "daily_briefs": [],
     }
 
 
@@ -95,9 +97,78 @@ def load_digest_memory() -> DigestMemory:
             }
         )
 
+    daily_briefs = data.get("daily_briefs", [])
+    if not isinstance(daily_briefs, list):
+        daily_briefs = []
+
+    cleaned_briefs: List[Dict[str, Any]] = []
+    for brief in daily_briefs[-BRIEF_HISTORY_MAX_DAYS:]:
+        if not isinstance(brief, dict):
+            continue
+        stories = []
+        for story in brief.get("stories", []):
+            if not isinstance(story, dict):
+                continue
+            stories.append(
+                {
+                    "story_id": str(story.get("story_id", "") or ""),
+                    "cluster_title": str(story.get("cluster_title", "") or ""),
+                    "change_status": str(story.get("change_status", "") or ""),
+                    "supporting_item_count": int(story.get("supporting_item_count", 0) or 0),
+                    "source_domains": [
+                        str(value).strip()
+                        for value in story.get("source_domains", [])
+                        if str(value).strip()
+                    ],
+                    "market_bucket_ids": [
+                        str(value).strip()
+                        for value in story.get("market_bucket_ids", [])
+                        if str(value).strip()
+                    ],
+                    "reliability_label": str(story.get("reliability_label", "") or ""),
+                    "story_score": float(story.get("story_score", 0.0) or 0.0),
+                    "signature_tokens": [
+                        str(value).strip()
+                        for value in story.get("signature_tokens", [])
+                        if str(value).strip()
+                    ],
+                    "thesis_links": [
+                        {
+                            "thesis_id": str(link.get("thesis_id", "") or ""),
+                            "relation": str(link.get("relation", "") or ""),
+                        }
+                        for link in story.get("thesis_links", [])
+                        if isinstance(link, dict)
+                    ],
+                }
+            )
+
+        cleaned_briefs.append(
+            {
+                "date": str(brief.get("date", "") or ""),
+                "generated_at": str(brief.get("generated_at", "") or ""),
+                "top_insight": str(brief.get("top_insight", "") or ""),
+                "stories": stories,
+                "quality_eval": brief.get("quality_eval", {}) if isinstance(brief.get("quality_eval", {}), dict) else {},
+                "market_map": brief.get("market_map", {}) if isinstance(brief.get("market_map", {}), dict) else {},
+                "thesis_tracker": [
+                    entry
+                    for entry in brief.get("thesis_tracker", [])
+                    if isinstance(entry, dict)
+                ],
+                "watchlist_hits": [
+                    entry
+                    for entry in brief.get("watchlist_hits", [])
+                    if isinstance(entry, dict)
+                ],
+                "top_picks": brief.get("top_picks", {}) if isinstance(brief.get("top_picks", {}), dict) else {},
+            }
+        )
+
     return {
-        "version": int(data.get("version", 1) or 1),
+        "version": max(int(data.get("version", 1) or 1), 2),
         "events": cleaned_events,
+        "daily_briefs": cleaned_briefs,
     }
 
 
@@ -186,12 +257,66 @@ def build_memory_snapshot(
         {"entity": entity, "count": count}
         for entity, count in entity_counts.most_common(5)
     ]
+    recent_briefs = []
+    market_counts: Counter[str] = Counter()
+    thesis_counts: Counter[str] = Counter()
+    quality_history: List[Dict[str, Any]] = []
+
+    for brief in memory.get("daily_briefs", [])[-7:]:
+        if not isinstance(brief, dict):
+            continue
+        brief_date = str(brief.get("date", "") or "")
+        story_titles = [
+            str(story.get("cluster_title", "") or "")
+            for story in brief.get("stories", [])
+            if isinstance(story, dict) and str(story.get("cluster_title", "") or "").strip()
+        ][:3]
+        recent_briefs.append(
+            {
+                "date": brief_date,
+                "top_insight": str(brief.get("top_insight", "") or ""),
+                "story_titles": story_titles,
+            }
+        )
+        for story in brief.get("stories", []):
+            if not isinstance(story, dict):
+                continue
+            for bucket_id in story.get("market_bucket_ids", []):
+                if str(bucket_id).strip():
+                    market_counts[str(bucket_id).strip()] += 1
+            for link in story.get("thesis_links", []):
+                if not isinstance(link, dict):
+                    continue
+                thesis_id = str(link.get("thesis_id", "") or "").strip()
+                relation = str(link.get("relation", "") or "").strip()
+                if thesis_id and relation and relation != "adjacent":
+                    thesis_counts[thesis_id] += 1
+
+        metrics = (brief.get("quality_eval", {}) or {}).get("metrics", {})
+        if isinstance(metrics, dict):
+            quality_history.append(
+                {
+                    "date": brief_date,
+                    "signal_to_noise": float(metrics.get("signal_to_noise", 0.0) or 0.0),
+                    "novelty": float(metrics.get("novelty", 0.0) or 0.0),
+                }
+            )
 
     return {
         "lookback_days": HISTORY_CONTEXT_WINDOW_DAYS,
         "top_themes": top_themes,
         "top_entities": top_entities,
         "event_count": len(memory.get("events", [])),
+        "recent_briefs": recent_briefs,
+        "top_market_buckets": [
+            {"bucket_id": bucket_id, "count": count}
+            for bucket_id, count in market_counts.most_common(5)
+        ],
+        "top_theses": [
+            {"thesis_id": thesis_id, "count": count}
+            for thesis_id, count in thesis_counts.most_common(5)
+        ],
+        "quality_history": quality_history[-5:],
     }
 
 
@@ -221,6 +346,19 @@ def record_digest_items(items: List[Dict[str, Any]]) -> None:
                     if str(entity).strip()
                 ],
                 "priority_score": round(float(item.get("priority_score", 0.0) or 0.0), 2),
+                "story_id": str(item.get("story_id", "") or ""),
+                "cluster_id": str(item.get("cluster_id", "") or ""),
+                "change_status": str(item.get("change_status", "") or ""),
+                "market_buckets": [
+                    str(bucket).strip()
+                    for bucket in item.get("market_buckets", [])
+                    if str(bucket).strip()
+                ],
+                "thesis_ids": [
+                    str(link.get("thesis_id", "")).strip()
+                    for link in item.get("thesis_links", [])
+                    if isinstance(link, dict) and str(link.get("thesis_id", "")).strip()
+                ],
                 "objective_scores": {
                     str(key): round(float(value or 0.0), 2)
                     for key, value in (item.get("objective_scores", {}) or {}).items()
@@ -230,4 +368,103 @@ def record_digest_items(items: List[Dict[str, Any]]) -> None:
         )
 
     memory["events"] = events[-HISTORY_MAX_EVENTS:]
+    save_digest_memory(memory)
+
+
+def latest_previous_brief(
+    memory: DigestMemory,
+    *,
+    before_date: str | None = None,
+) -> Dict[str, Any] | None:
+    target_date = before_date or _today_key()
+    candidates = [
+        brief
+        for brief in memory.get("daily_briefs", [])
+        if isinstance(brief, dict) and str(brief.get("date", "") or "").strip() and str(brief.get("date", "") or "") < target_date
+    ]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda brief: str(brief.get("date", "") or ""))[-1]
+
+
+def _brief_history_entry(brief: Dict[str, Any]) -> Dict[str, Any]:
+    stories = []
+    for story in brief.get("stories", []):
+        if not isinstance(story, dict):
+            continue
+        stories.append(
+            {
+                "story_id": str(story.get("story_id", "") or ""),
+                "cluster_title": str(story.get("cluster_title", "") or ""),
+                "change_status": str(story.get("change_status", "") or ""),
+                "supporting_item_count": int(story.get("supporting_item_count", 0) or 0),
+                "source_domains": [
+                    str(value).strip()
+                    for value in story.get("source_domains", [])
+                    if str(value).strip()
+                ],
+                "market_bucket_ids": [
+                    str(value).strip()
+                    for value in story.get("market_bucket_ids", [])
+                    if str(value).strip()
+                ],
+                "reliability_label": str(story.get("reliability_label", "") or ""),
+                "story_score": round(float(story.get("story_score", 0.0) or 0.0), 2),
+                "signature_tokens": [
+                    str(value).strip()
+                    for value in story.get("signature_tokens", [])
+                    if str(value).strip()
+                ],
+                "thesis_links": [
+                    {
+                        "thesis_id": str(link.get("thesis_id", "") or ""),
+                        "relation": str(link.get("relation", "") or ""),
+                    }
+                    for link in story.get("thesis_links", [])
+                    if isinstance(link, dict)
+                ],
+            }
+        )
+
+    return {
+        "date": str(brief.get("date", "") or _today_key()),
+        "generated_at": str(brief.get("generated_at", "") or ""),
+        "top_insight": str(((brief.get("operator_moves", {}) or {}).get("top_insight", "")) or ""),
+        "stories": stories,
+        "quality_eval": brief.get("quality_eval", {}) if isinstance(brief.get("quality_eval", {}), dict) else {},
+        "market_map": brief.get("market_map", {}) if isinstance(brief.get("market_map", {}), dict) else {},
+        "thesis_tracker": [
+            entry
+            for entry in brief.get("thesis_tracker", [])
+            if isinstance(entry, dict)
+        ],
+        "watchlist_hits": [
+            entry
+            for entry in brief.get("watchlist_hits", [])
+            if isinstance(entry, dict)
+        ],
+        "top_picks": brief.get("top_picks", {}) if isinstance(brief.get("top_picks", {}), dict) else {},
+    }
+
+
+def record_operator_brief(brief: Dict[str, Any]) -> None:
+    memory = load_digest_memory()
+    daily_briefs = [
+        entry
+        for entry in memory.get("daily_briefs", [])
+        if isinstance(entry, dict)
+    ]
+    entry = _brief_history_entry(brief)
+    daily_briefs = [
+        brief_entry
+        for brief_entry in daily_briefs
+        if str(brief_entry.get("date", "") or "") != entry["date"]
+    ]
+    daily_briefs.append(entry)
+    daily_briefs = sorted(
+        daily_briefs,
+        key=lambda brief_entry: str(brief_entry.get("date", "") or ""),
+    )[-BRIEF_HISTORY_MAX_DAYS:]
+    memory["version"] = 2
+    memory["daily_briefs"] = daily_briefs
     save_digest_memory(memory)

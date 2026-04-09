@@ -48,9 +48,9 @@ DIGEST_ANALYST_AGENT_TIMEOUT_SECONDS = int(
     )
 )
 
-GMAIL_ADDRESS = get_env("GMAIL_ADDRESS")
-GMAIL_APP_PASSWORD = get_env("GMAIL_APP_PASSWORD")
-TO_EMAIL = get_env("TO_EMAIL")
+GMAIL_ADDRESS = get_env("GMAIL_ADDRESS", required=False, default="")
+GMAIL_APP_PASSWORD = get_env("GMAIL_APP_PASSWORD", required=False, default="")
+TO_EMAIL = get_env("TO_EMAIL", required=False, default="")
 EMAIL_SUBJECT_PREFIX = get_env(
     "EMAIL_SUBJECT_PREFIX", required=False, default=""
 )
@@ -84,6 +84,36 @@ DIGEST_MEMORY_FILE_PATH = get_env(
     required=False,
     default="data/state/digest_memory.json",
 )
+SOURCE_POLICY_FILE_PATH = get_env(
+    "SOURCE_POLICY_FILE_PATH",
+    required=False,
+    default="data/source_policies.json",
+)
+THESES_FILE_PATH = get_env(
+    "THESES_FILE_PATH",
+    required=False,
+    default="data/theses.json",
+)
+MARKET_MAP_FILE_PATH = get_env(
+    "MARKET_MAP_FILE_PATH",
+    required=False,
+    default="data/market_map.json",
+)
+GITHUB_WATCHLIST_FILE_PATH = get_env(
+    "GITHUB_WATCHLIST_FILE_PATH",
+    required=False,
+    default="data/github_watchlist.json",
+)
+OPERATOR_BRIEF_FILE_PATH = get_env(
+    "OPERATOR_BRIEF_FILE_PATH",
+    required=False,
+    default="latest_operator_brief.json",
+)
+OPERATOR_COCKPIT_FILE_PATH = get_env(
+    "OPERATOR_COCKPIT_FILE_PATH",
+    required=False,
+    default="latest_operator_cockpit.html",
+)
 HISTORY_MAX_EVENTS = int(
     get_env("HISTORY_MAX_EVENTS", required=False, default="1500")
 )
@@ -92,6 +122,15 @@ HISTORY_REPEAT_WINDOW_DAYS = int(
 )
 HISTORY_CONTEXT_WINDOW_DAYS = int(
     get_env("HISTORY_CONTEXT_WINDOW_DAYS", required=False, default="21")
+)
+BRIEF_HISTORY_MAX_DAYS = int(
+    get_env("BRIEF_HISTORY_MAX_DAYS", required=False, default="45")
+)
+OPERATOR_STORY_LIMIT = int(
+    get_env("OPERATOR_STORY_LIMIT", required=False, default="6")
+)
+WATCHLIST_STORY_LIMIT = int(
+    get_env("WATCHLIST_STORY_LIMIT", required=False, default="3")
 )
 
 # Daily Digest v2 personalization config.

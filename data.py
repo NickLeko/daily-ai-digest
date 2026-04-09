@@ -621,6 +621,13 @@ def fetch_github_repos(memory: DigestMemory | None = None) -> List[DigestItem]:
                 "item_key": key,
                 "published_at": parse_iso_datetime(repo.get("updated_at", "")),
                 "source": "GitHub Search",
+                "repo_full_name": full_name,
+                "repo_owner": full_name.split("/", 1)[0] if "/" in full_name else "",
+                "repo_name": full_name.split("/", 1)[1] if "/" in full_name else full_name,
+                "repo_topics": repo.get("topics", []) or [],
+                "stars": int(repo.get("stargazers_count", 0) or 0),
+                "forks": int(repo.get("forks_count", 0) or 0),
+                "watchers": int(repo.get("watchers_count", 0) or 0),
             }
         )
 

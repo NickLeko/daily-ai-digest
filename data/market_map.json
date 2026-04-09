@@ -1,0 +1,49 @@
+{
+  "buckets": [
+    {
+      "id": "foundation_models",
+      "label": "Foundation models / model providers",
+      "keywords": ["openai", "anthropic", "google", "gemini", "llama", "model provider", "foundation model"]
+    },
+    {
+      "id": "agent_frameworks",
+      "label": "Agent frameworks / orchestration",
+      "keywords": ["agent", "agentic", "orchestration", "workflow engine", "multi-agent", "task runner", "copilot"]
+    },
+    {
+      "id": "eval_governance",
+      "label": "Eval / governance / safety",
+      "keywords": ["eval", "evaluation", "guardrail", "governance", "safety", "monitoring", "privacy", "security", "audit"]
+    },
+    {
+      "id": "ehr_interoperability",
+      "label": "EHR / interoperability / data exchange",
+      "keywords": ["ehr", "fhir", "tefca", "uscdi", "hl7", "api", "interoperability", "data exchange", "epic", "cerner"]
+    },
+    {
+      "id": "provider_workflow",
+      "label": "Provider workflow / clinical documentation",
+      "keywords": ["ambient", "documentation", "scribe", "charting", "clinical note", "provider workflow", "care coordination"]
+    },
+    {
+      "id": "payer_admin_ops",
+      "label": "Payer / prior auth / RCM / admin ops",
+      "keywords": ["prior authorization", "prior auth", "claims", "denials", "revenue cycle", "rcm", "appeals", "intake", "eligibility", "patient access", "billing"]
+    },
+    {
+      "id": "infra_devtools",
+      "label": "Infrastructure / developer tooling",
+      "keywords": ["sdk", "framework", "library", "tooling", "cli", "developer workflow", "terminal", "mcp", "api wrapper"]
+    },
+    {
+      "id": "regulation_policy",
+      "label": "Regulation / policy / standards",
+      "keywords": ["cms", "fda", "onc", "policy", "guidance", "final rule", "proposed rule", "standard", "standards", "compliance"]
+    },
+    {
+      "id": "buyer_adoption",
+      "label": "Buyer adoption / CIO / enterprise demand",
+      "keywords": ["health system", "payer", "enterprise", "deployment", "pilot", "rollout", "customer", "buyer", "cio", "implementation"]
+    }
+  ]
+}

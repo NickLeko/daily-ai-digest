@@ -1,0 +1,44 @@
+{
+  "theses": [
+    {
+      "id": "interop_distribution_layer",
+      "title": "Interoperability / FHIR / TEFCA is becoming a workflow and distribution layer",
+      "keywords": ["interoperability", "fhir", "tefca", "uscdi", "api", "data exchange", "claims attachments"],
+      "support_keywords": ["final rule", "implementation", "deployment", "pilot", "partner", "exchange", "integration"],
+      "weaken_keywords": ["delay", "rollback", "challenge", "breach", "lawsuit", "blocker"],
+      "adjacent_keywords": ["ehr", "epic", "cerner", "health it", "certification"]
+    },
+    {
+      "id": "ambient_expands_downstream",
+      "title": "Ambient AI is an entry wedge into downstream admin and revenue-cycle workflows",
+      "keywords": ["ambient", "scribe", "documentation", "clinical note", "charting"],
+      "support_keywords": ["handoff", "coding", "billing", "follow-up", "queue", "workflow", "downstream"],
+      "weaken_keywords": ["pilot fatigue", "accuracy issue", "hallucination", "rollback", "complaint"],
+      "adjacent_keywords": ["clinical workflow", "inbox", "follow-up", "provider ops"]
+    },
+    {
+      "id": "workflow_fit_defensibility",
+      "title": "Healthcare AI defensibility will come from workflow fit, evals, governance, and abstention more than raw model novelty",
+      "keywords": ["eval", "evaluation", "governance", "guardrail", "audit", "monitoring", "abstention", "workflow fit"],
+      "support_keywords": ["production", "benchmark", "safety", "privacy", "security", "audit trail"],
+      "weaken_keywords": ["toy demo", "benchmark theater", "generic agent", "hype"],
+      "adjacent_keywords": ["rag", "retrieval", "workflow", "compliance"]
+    },
+    {
+      "id": "back_office_roi_wedge",
+      "title": "Back-office provider/payer automation is one of the clearest near-term ROI wedges",
+      "keywords": ["prior authorization", "claims", "denials", "appeals", "referral", "intake", "eligibility", "revenue cycle", "patient access"],
+      "support_keywords": ["turnaround", "reduction", "throughput", "automation", "handoff", "status visibility", "attachments"],
+      "weaken_keywords": ["low adoption", "workflow mismatch", "manual exception", "rollback"],
+      "adjacent_keywords": ["ops", "back office", "contact center", "forms"]
+    },
+    {
+      "id": "agent_tooling_compression",
+      "title": "Agent tooling value will compress unless paired with workflow-specific evidence, controls, and integrations",
+      "keywords": ["agent", "agentic", "orchestration", "framework", "tooling", "multi-agent", "copilot"],
+      "support_keywords": ["integration", "controls", "eval", "workflow", "governance", "auditability"],
+      "weaken_keywords": ["generic", "boilerplate", "starter", "toy", "demo only"],
+      "adjacent_keywords": ["developer tooling", "sdk", "session manager", "cli"]
+    }
+  ]
+}
