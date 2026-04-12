@@ -1,0 +1,119 @@
+<html>
+  <body>
+    <h2>
+      Daily AI Digest - April 09, 2026
+    </h2>
+    <p>
+      3 stories from 6 items: 1 repo, 1 news item, 1 regulatory update.
+    </p>
+    <p>
+      HEADLINES
+    </p>
+    <ol>
+      <li>
+        <a href="https://www.cms.gov/example/prior-auth-final-rule">
+          CMS final rule tightens prior auth evidence exchange
+        </a>
+      </li>
+      <li>
+        <a href="https://github.com/example/audit-lane">
+          Audit-lane repo packages prior-auth evidence checks
+        </a>
+      </li>
+      <li>
+        <a href="https://example.com/career/payer-ai-governance">
+          Payer operations roles ask for AI governance fluency
+        </a>
+      </li>
+    </ol>
+    <div>
+      <div>
+        <p>
+          CMS final rule tightens prior auth evidence exchange
+        </p>
+        <p>
+          CMS Newsroom, Federal Register | Confidence: High
+        </p>
+        <p>
+          <strong>
+            Summary:
+          </strong>
+          CMS final rule tightens prior auth evidence exchange summary.
+        </p>
+        <p>
+          <strong>
+            Why it matters:
+          </strong>
+          CMS final rule tightens prior auth evidence exchange matters to operator planning.
+        </p>
+        <p>
+          <strong>
+            Action:
+          </strong>
+          Audit one prior auth evidence handoff this week against the new CMS fields
+        </p>
+        <p>
+          <a href="https://www.cms.gov/example/prior-auth-final-rule">
+            Link
+          </a>
+        </p>
+      </div>
+      <div>
+        <p>
+          Audit-lane repo packages prior-auth evidence checks
+        </p>
+        <p>
+          GitHub Search | Confidence: High
+        </p>
+        <p>
+          <strong>
+            Summary:
+          </strong>
+          Audit-lane repo packages prior-auth evidence checks summary.
+        </p>
+        <p>
+          <strong>
+            Why it matters:
+          </strong>
+          Audit-lane repo packages prior-auth evidence checks matters to operator planning.
+        </p>
+        <p>
+          <strong>
+            Action:
+          </strong>
+          Prototype a narrow audit lane by Friday using one denial category
+        </p>
+        <p>
+          <a href="https://github.com/example/audit-lane">
+            Link
+          </a>
+        </p>
+      </div>
+      <div>
+        <p>
+          Payer operations roles ask for AI governance fluency
+        </p>
+        <p>
+          Healthcare Jobs Weekly | Confidence: Medium
+        </p>
+        <p>
+          <strong>
+            Summary:
+          </strong>
+          Payer operations roles ask for AI governance fluency summary.
+        </p>
+        <p>
+          <strong>
+            Why it matters:
+          </strong>
+          Payer operations roles ask for AI governance fluency matters to operator planning.
+        </p>
+        <p>
+          <a href="https://example.com/career/payer-ai-governance">
+            Link
+          </a>
+        </p>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,330 @@
+<html>
+  <body>
+    <h2>
+      Weekly AI Digest - Operator Review
+    </h2>
+    <p>
+      <strong>
+        Date:
+      </strong>
+      April 09, 2026
+    </p>
+    <p>
+      6 raw signals normalized into 3 story clusters, with 3 surfaced in the email.
+    </p>
+    <div>
+      <p>
+        WHAT CHANGED SINCE YESTERDAY
+      </p>
+      <p>
+        <strong>
+          Escalating:
+        </strong>
+        Prior authorization automation moved from pilot notes into CMS operating guidance.
+      </p>
+    </div>
+    <div>
+      <p>
+        TOP PICKS BY OBJECTIVE
+      </p>
+      <p>
+        <strong>
+          Top item for career:
+        </strong>
+        <a href="https://example.com/career/payer-ai-governance">
+          Payer operations roles ask for AI governance fluency
+        </a>
+      </p>
+      <p>
+        <strong>
+          Top item for build:
+        </strong>
+        <a href="https://github.com/example/audit-lane">
+          Audit-lane repo packages prior-auth evidence checks
+        </a>
+      </p>
+      <p>
+        <strong>
+          Top item for content:
+        </strong>
+        <a href="https://example.com/career/payer-ai-governance">
+          Payer operations roles ask for AI governance fluency
+        </a>
+      </p>
+      <p>
+        <strong>
+          Top item for regulatory:
+        </strong>
+        <a href="https://www.cms.gov/example/prior-auth-final-rule">
+          CMS final rule tightens prior auth evidence exchange
+        </a>
+      </p>
+    </div>
+    <div>
+      <p>
+        THESIS TRACKER
+      </p>
+      <p>
+        <strong>
+          Prior auth is becoming workflow infrastructure
+        </strong>
+        <span>
+          [STRENGTHENING]
+        </span>
+        <br />
+        <span>
+          Evidence: CMS final rule tightens prior auth evidence exchange, Audit-lane repo packages prior-auth evidence checks
+        </span>
+      </p>
+    </div>
+    <div>
+      <p>
+        MARKET MAP PULSE
+      </p>
+      <p>
+        <strong>
+          Hot:
+        </strong>
+        Prior auth (+2)
+      </p>
+      <p>
+        <strong>
+          Quiet:
+        </strong>
+        Generic agent demos (-2)
+      </p>
+      <p>
+        <strong>
+          Cross-category spillover:
+        </strong>
+        CMS final rule tightens prior auth evidence exchange
+      </p>
+    </div>
+    <div>
+      <p>
+        WATCHED REPOS
+      </p>
+      <p>
+        <strong>
+          audit-lane
+        </strong>
+        <span>
+          [NEW]
+        </span>
+        <br />
+        <span>
+          Matches: repo: github.com/example/audit-lane
+        </span>
+      </p>
+    </div>
+    <div>
+      <p>
+        TOP INSIGHT
+      </p>
+      <p>
+        Prior auth is the clearest wedge because policy, payer operations, and eval tooling all point at auditable evidence exchange.
+      </p>
+    </div>
+    <div>
+      <p>
+        OPERATOR STORY BOARD
+      </p>
+      <div>
+        <div>
+          <span>
+            REGULATORY
+          </span>
+          <span>
+            ESCALATING
+          </span>
+          <span>
+            HIGH SIGNAL
+          </span>
+          <span>
+            RELIABILITY HIGH
+          </span>
+        </div>
+        <p>
+          <a href="https://www.cms.gov/example/prior-auth-final-rule">
+            CMS final rule tightens prior auth evidence exchange
+          </a>
+        </p>
+        <p>
+          <strong>
+            Supporting sources:
+          </strong>
+          CMS Newsroom, Federal Register.
+          <strong>
+            Confidence:
+          </strong>
+          High.
+        </p>
+        <p>
+          CMS final rule tightens prior auth evidence exchange summary. Weekly-only detail should not appear in daily.
+        </p>
+        <p>
+          <strong>
+            Why it matters:
+          </strong>
+          CMS final rule tightens prior auth evidence exchange matters to operator planning. Weekly-only context should not appear in daily.
+        </p>
+        <p>
+          <strong>
+            Action:
+          </strong>
+          Audit one prior auth evidence handoff this week against the new CMS fields.
+        </p>
+        <p>
+          <strong>
+            Market buckets:
+          </strong>
+          Prior auth, Interoperability
+        </p>
+        <p>
+          <strong>
+            Thesis links:
+          </strong>
+          Prior auth is becoming workflow infrastructure [SUPPORTS]
+        </p>
+      </div>
+      <div>
+        <div>
+          <span>
+            REPO
+          </span>
+          <span>
+            NEW
+          </span>
+          <span>
+            HIGH SIGNAL
+          </span>
+          <span>
+            RELIABILITY MEDIUM
+          </span>
+        </div>
+        <p>
+          <a href="https://github.com/example/audit-lane">
+            Audit-lane repo packages prior-auth evidence checks
+          </a>
+        </p>
+        <p>
+          <strong>
+            Supporting sources:
+          </strong>
+          GitHub Search.
+          <strong>
+            Confidence:
+          </strong>
+          High.
+        </p>
+        <p>
+          Audit-lane repo packages prior-auth evidence checks summary. Weekly-only detail should not appear in daily.
+        </p>
+        <p>
+          <strong>
+            Why it matters:
+          </strong>
+          Audit-lane repo packages prior-auth evidence checks matters to operator planning. Weekly-only context should not appear in daily.
+        </p>
+        <p>
+          <strong>
+            Action:
+          </strong>
+          Prototype a narrow audit lane by Friday using one denial category.
+        </p>
+        <p>
+          <strong>
+            Market buckets:
+          </strong>
+          Eval tooling, Prior auth
+        </p>
+        <p>
+          <strong>
+            Thesis links:
+          </strong>
+          Healthcare evals need operator-owned audit trails [SUPPORTS]
+        </p>
+      </div>
+      <div>
+        <div>
+          <span>
+            NEWS
+          </span>
+          <span>
+            REPEATED
+          </span>
+          <span>
+            MEDIUM SIGNAL
+          </span>
+          <span>
+            RELIABILITY MEDIUM
+          </span>
+        </div>
+        <p>
+          <a href="https://example.com/career/payer-ai-governance">
+            Payer operations roles ask for AI governance fluency
+          </a>
+        </p>
+        <p>
+          <strong>
+            Supporting sources:
+          </strong>
+          Healthcare Jobs Weekly.
+          <strong>
+            Confidence:
+          </strong>
+          Medium.
+        </p>
+        <p>
+          Payer operations roles ask for AI governance fluency summary. Weekly-only detail should not appear in daily.
+        </p>
+        <p>
+          <strong>
+            Why it matters:
+          </strong>
+          Payer operations roles ask for AI governance fluency matters to operator planning. Weekly-only context should not appear in daily.
+        </p>
+        <p>
+          <strong>
+            Action:
+          </strong>
+          Map three interview stories to governance, workflow, and measurement examples.
+        </p>
+        <p>
+          <strong>
+            Market buckets:
+          </strong>
+          Career
+        </p>
+      </div>
+    </div>
+    <div>
+      <p>
+        OPERATOR MOVES
+      </p>
+      <p>
+        <strong>
+          Content angle:
+        </strong>
+        Write about why evidence exchange beats generic agent demos for healthcare operators.
+      </p>
+      <p>
+        <strong>
+          Build idea:
+        </strong>
+        Prototype an intake-to-appeal audit lane for one prior-auth workflow.
+      </p>
+    </div>
+    <div>
+      <p>
+        DIGEST QUALITY
+      </p>
+      <p>
+        Signal/noise: 4, Novelty: 4, Source quality: 5, Objective separation: 4
+      </p>
+      <p>
+        Recheck the jobs signal before using it as external proof.
+      </p>
+    </div>
+  </body>
+</html>
