@@ -1,8 +1,8 @@
 # Daily AI Digest
 
-Daily AI Digest v2 is now a compact operator cockpit for tracking healthcare AI signal, not just a better newsletter.
+Daily AI Digest v2 is a scan-first healthcare AI digest built around surfaced stories, not internal scoring commentary.
 
-It still runs on the existing once-per-day pipeline, but the output is now driven by a structured story layer that clusters related items, suppresses duplicates, scores source reliability, compares against yesterday, tracks saved theses, and saves a reusable operator brief artifact alongside the email.
+It still runs on the existing once-per-day pipeline. The daily email keeps the header short, shows headline links immediately, and renders up to four story cards by default. The richer operator analysis still exists in the structured brief and the weekly/cockpit view.
 
 ---
 
@@ -14,7 +14,7 @@ It still runs on the existing once-per-day pipeline, but the output is now drive
 - **FDA enforcement + recall data:** via openFDA
 
 ### Processing
-- **LLM-based summarization:** (2-sentence summaries)
+- **LLM-based summarization:** upstream summaries with one-sentence email trimming
 - **Canonical normalized item layer:** item metadata, tags, buckets, reliability, thesis links, and watchlist matches
 - **Topic clustering + duplicate suppression:** one story card can hold multiple supporting items/sources
 - **Action-oriented "Why it matters" insights:** more workflow-specific and less templated
@@ -26,12 +26,12 @@ It still runs on the existing once-per-day pipeline, but the output is now drive
 - **Market map pulse:** bucketed heat across durable market categories
 - **Digest quality evals:** novelty, source quality, duplication, objective separation, thesis coverage, signal-to-noise
 - **Digest Analyst Agent layer:** optional in-process OpenAI Agents SDK judgment pass with safe fallback
-- **Cross-source synthesis:** top picks, Top Insight, and compact operator moves
+- **Cross-source synthesis:** available in weekly/cockpit output, not the default daily email
 
 ### Output
-- Clean HTML digest
+- Clean skim-first HTML digest
 - Structured `latest_operator_brief.json`
-- Local `latest_operator_cockpit.html`
+- Local `latest_operator_cockpit.html` with the richer weekly-style operator review
 - Email delivery
 - Daily automated run via **GitHub Actions**
 - Local artifacts saved (`latest_digest.html`, `latest_operator_brief.json`, `latest_operator_cockpit.html`)
@@ -40,9 +40,24 @@ It still runs on the existing once-per-day pipeline, but the output is now drive
 
 ---
 
-## Operator Brief sections
+## Digest modes
 
-The email and local cockpit are now built from the same structured brief and aim to answer:
+The daily email is intentionally minimal:
+
+- Title/date
+- One-line story and item counts
+- `HEADLINES`
+- Up to four story cards by default
+
+Daily story cards include:
+
+- Title
+- Source + confidence
+- One-sentence summary
+- One-sentence why-it-matters
+- Link
+
+The weekly mode and local cockpit are built from the same structured brief and can include the heavier operator review:
 
 - What actually changed since yesterday?
 - Which themes are strengthening or weakening?
@@ -51,7 +66,7 @@ The email and local cockpit are now built from the same structured brief and aim
 - Which items are real signal vs duplicated noise?
 - What deserves attention for career, build, content, and market positioning?
 
-Key rendered sections:
+Weekly/cockpit sections:
 
 - `What changed since yesterday`
 - `Top picks by objective`
@@ -91,16 +106,16 @@ Generated artifacts:
 
 - `latest_digest.html`: email-ready digest
 - `latest_operator_brief.json`: canonical operator brief artifact
-- `latest_operator_cockpit.html`: minimal local cockpit view
+- `latest_operator_cockpit.html`: weekly-style local operator review
 
 ---
 
 ## Example output
 
 Includes:
-- Top Insight (cross-source synthesis)
-- Signal prioritization
-- Actionable summaries for each item
+- Immediate headline scan
+- Source + confidence on each story
+- One-sentence summary and why-it-matters lines
 
 ![Example Output](./assets/example.png)
 
@@ -120,6 +135,7 @@ TO_EMAIL=recipient@email.com
 GITHUB_TOKEN=your_token_here (optional)
 LOCAL_TIMEZONE=America/Los_Angeles
 DIGEST_ANALYST_AGENT_ENABLED=true
+DIGEST_MODE=daily
 ```
 
 ---
@@ -140,6 +156,12 @@ Safe local dry run:
 
 ```bash
 ./.venv/bin/python main.py --dry-run
+```
+
+Render the weekly-style operator review instead of the default daily email:
+
+```bash
+./.venv/bin/python main.py --dry-run --digest-mode weekly
 ```
 
 `--dry-run` still fetches and renders, but it does not send email and it does not update send/memory state. It writes:
@@ -192,11 +214,11 @@ Built as a personal intelligence system to:
 - Personalized scoring layer with centralized weights in `config.py`
 - Story clustering and duplicate suppression
 - Explicit source reliability scoring
-- Saved thesis tracker
-- Market map pulse
-- What-changed delta layer
+- Saved thesis tracker in weekly/cockpit mode
+- Market map pulse in weekly/cockpit mode
+- What-changed delta layer in weekly/cockpit mode
 - Watchlist-aware repo surfacing
-- Internal digest quality evals
+- Internal digest quality evals in weekly/cockpit mode
 - LLM-based summarization + synthesis
 - Lightweight JSON memory for repeat detection and theme tracking
 - Fully automated daily delivery via GitHub Actions

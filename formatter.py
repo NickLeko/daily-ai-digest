@@ -1,5 +1,5 @@
-from collections import defaultdict
 from html import escape
+import re
 from typing import Dict, List
 
 from state import local_now
@@ -9,12 +9,6 @@ CATEGORY_HEADINGS = {
     "Repo": "Repos",
     "News": "News",
     "Regulatory": "Regulatory Updates",
-}
-
-EMPTY_SECTION_MESSAGES = {
-    "Repo": "No qualifying repositories were available today.",
-    "News": "No high-signal general AI/healthcare news passed filters today.",
-    "Regulatory": "No high-signal regulatory updates passed filters today.",
 }
 
 SIGNAL_STYLES = {
@@ -50,6 +44,44 @@ CHANGE_STYLES = {
 }
 
 SECTION_ORDER = ["Repo", "News", "Regulatory"]
+DAILY_STORY_LIMIT = 4
+
+ACTION_WORDS = {
+    "audit",
+    "check",
+    "decide",
+    "inventory",
+    "map",
+    "pilot",
+    "prioritize",
+    "prototype",
+    "rank",
+    "review",
+    "test",
+    "validate",
+}
+
+GENERIC_ACTION_PHRASES = {
+    "keep an eye",
+    "monitor developments",
+    "stay informed",
+    "watch this space",
+    "review whether this changes",
+}
+
+THIS_WEEK_TERMS = {
+    "this week",
+    "next 7",
+    "next seven",
+    "next sprint",
+    "today",
+    "tomorrow",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+}
 
 
 def render_signal_badge(signal: str) -> str:
@@ -95,6 +127,33 @@ def render_category_badge(category: str) -> str:
 
 def escaped(value: object) -> str:
     return escape(str(value or ""), quote=True)
+
+
+def compact_text(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def sentence_limited(value: object, max_sentences: int = 1) -> str:
+    text = compact_text(value)
+    if not text:
+        return ""
+
+    sentences = [
+        match.group(0).strip()
+        for match in re.finditer(r"[^.!?]+(?:[.!?]+|$)", text)
+        if match.group(0).strip()
+    ]
+    if not sentences:
+        return text
+    return " ".join(sentences[:max_sentences]).strip()
+
+
+def normalized_words(value: object) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", str(value or "").lower()))
+
+
+def singular_plural(count: int, singular: str, plural: str | None = None) -> str:
+    return f"{count} {singular if count == 1 else (plural or singular + 's')}"
 
 
 def sort_items_for_render(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -144,8 +203,7 @@ def build_summary_line(counts: Dict[str, int]) -> str:
     return (
         f"{category_count_label('Repo', counts['Repo'])}, "
         f"{category_count_label('News', counts['News'])}, "
-        f"and {category_count_label('Regulatory', counts['Regulatory'])}. "
-        "Concise and signal-heavy."
+        f"and {category_count_label('Regulatory', counts['Regulatory'])}."
     )
 
 
@@ -391,7 +449,211 @@ def render_quality_flags(quality_eval: Dict[str, object] | None) -> str:
     """
 
 
-def render_story_cards(stories: List[Dict[str, object]] | None) -> str:
+def story_id_for_render(story: Dict[str, object]) -> str:
+    return compact_text(
+        story.get("story_id")
+        or story.get("cluster_id")
+        or story.get("canonical_url")
+        or story.get("url")
+        or story.get("cluster_title")
+        or story.get("title")
+    )
+
+
+def story_title_for_render(story: Dict[str, object]) -> str:
+    return compact_text(story.get("cluster_title") or story.get("title") or "Untitled story")
+
+
+def story_url_for_render(story: Dict[str, object]) -> str:
+    return compact_text(story.get("canonical_url") or story.get("url") or "#")
+
+
+def story_source_names(story: Dict[str, object]) -> List[str]:
+    raw_sources = story.get("source_names") or []
+    if not isinstance(raw_sources, list):
+        raw_sources = [raw_sources]
+
+    sources = [
+        compact_text(source)
+        for source in raw_sources
+        if compact_text(source)
+    ]
+    fallback_source = compact_text(story.get("source") or story.get("source_name"))
+    if fallback_source:
+        sources.append(fallback_source)
+
+    seen: set[str] = set()
+    result: List[str] = []
+    for source in sources:
+        if source in seen:
+            continue
+        seen.add(source)
+        result.append(source)
+    return result
+
+
+def story_confidence_label(story: Dict[str, object]) -> str:
+    return compact_text(story.get("confidence") or story.get("reliability_label") or "Medium")
+
+
+def story_source_confidence_line(story: Dict[str, object]) -> str:
+    sources = story_source_names(story)
+    source_line = ", ".join(sources[:2]) if sources else "Unknown source"
+    if len(sources) > 2:
+        source_line += f" + {len(sources) - 2} more"
+
+    return f"{source_line} | Confidence: {story_confidence_label(story)}"
+
+
+def should_render_daily_action(story: Dict[str, object], action: str) -> bool:
+    if story_confidence_label(story).lower() != "high":
+        return False
+
+    action_text = compact_text(action)
+    normalized_action = action_text.lower()
+    if len(action_text) < 20 or len(action_text) > 180:
+        return False
+    if any(phrase in normalized_action for phrase in GENERIC_ACTION_PHRASES):
+        return False
+    if not (ACTION_WORDS & normalized_words(action_text)):
+        return False
+
+    has_this_week_relevance = (
+        any(term in normalized_action for term in THIS_WEEK_TERMS)
+        or "by " in normalized_action
+        or compact_text(story.get("near_term_actionability")).lower() == "high"
+    )
+    has_story_context = bool(story.get("workflow_wedges")) or compact_text(story.get("category")).lower() == "regulatory"
+    return has_this_week_relevance and has_story_context
+
+
+def select_daily_stories(
+    operator_brief: Dict[str, object],
+    *,
+    story_limit: int = DAILY_STORY_LIMIT,
+) -> List[Dict[str, object]]:
+    story_limit = max(1, story_limit)
+    candidates: List[Dict[str, object]] = []
+    for source_key in ("story_cards", "stories"):
+        raw_stories = operator_brief.get(source_key, []) or []
+        if not isinstance(raw_stories, list):
+            continue
+        for story in raw_stories:
+            if isinstance(story, dict):
+                candidates.append(story)
+
+    selected: List[Dict[str, object]] = []
+    seen: set[str] = set()
+    for story in candidates:
+        story_id = story_id_for_render(story)
+        if story_id and story_id in seen:
+            continue
+        if story_id:
+            seen.add(story_id)
+        selected.append(story)
+        if len(selected) >= story_limit:
+            break
+
+    return selected
+
+
+def build_daily_story_header(
+    operator_brief: Dict[str, object],
+    stories: List[Dict[str, object]],
+) -> str:
+    summary = operator_brief.get("summary", {}) or {}
+    raw_count = int(summary.get("raw_item_count", 0) or 0)
+    if raw_count <= 0:
+        raw_count = len(stories)
+
+    counts = {category: 0 for category in SECTION_ORDER}
+    for story in stories:
+        category = compact_text(story.get("category"))
+        if category in counts:
+            counts[category] += 1
+
+    category_parts = [
+        category_count_label(category, count)
+        for category, count in counts.items()
+        if count
+    ]
+    category_tail = f": {', '.join(category_parts)}" if category_parts else ""
+    return (
+        f"{singular_plural(len(stories), 'story', 'stories')} from "
+        f"{singular_plural(raw_count, 'item')}{category_tail}."
+    )
+
+
+def render_daily_headlines(stories: List[Dict[str, object]]) -> str:
+    if not stories:
+        return """
+        <p style="margin: 8px 0 14px 0; color:#555;">No surfaced stories today.</p>
+        """
+
+    rows = []
+    for story in stories:
+        rows.append(
+            f"""
+            <li style="margin: 0 0 6px 0;">
+              <a href="{escaped(story_url_for_render(story))}" style="color:#0b57d0; text-decoration:none; font-weight:700;">
+                {escaped(story_title_for_render(story))}
+              </a>
+            </li>
+            """
+        )
+
+    return f"""
+        <p style="margin: 10px 0 6px 0; font-size: 12px; font-weight: 700; color:#555; letter-spacing: 0.02em;">
+          HEADLINES
+        </p>
+        <ol style="margin: 0 0 12px 20px; padding: 0;">
+          {''.join(rows)}
+        </ol>
+    """
+
+
+def render_daily_story_cards(stories: List[Dict[str, object]]) -> str:
+    if not stories:
+        return ""
+
+    cards = []
+    for story in stories:
+        summary = sentence_limited(story.get("summary"), 1)
+        why_it_matters = sentence_limited(story.get("why_it_matters"), 1)
+        action = sentence_limited(story.get("action_suggestion"), 1).rstrip(".!?")
+        action_line = ""
+        if action and should_render_daily_action(story, action):
+            action_line = f"""
+              <p style="margin: 0 0 8px 0;"><strong>Action:</strong> {escaped(action)}</p>
+            """
+
+        cards.append(
+            f"""
+            <div style="padding: 14px 0; border-top: 1px solid #e5e7eb;">
+              <p style="margin: 0 0 4px 0; font-size: 17px; font-weight: 700; line-height: 1.3;">
+                {escaped(story_title_for_render(story))}
+              </p>
+              <p style="margin: 0 0 8px 0; color:#555; font-size: 13px;">
+                {escaped(story_source_confidence_line(story))}
+              </p>
+              <p style="margin: 0 0 8px 0;"><strong>Summary:</strong> {escaped(summary)}</p>
+              <p style="margin: 0 0 8px 0;"><strong>Why it matters:</strong> {escaped(why_it_matters)}</p>
+              {action_line}
+              <p style="margin: 0;">
+                <a href="{escaped(story_url_for_render(story))}" style="color:#0b57d0; text-decoration:none; font-weight:700;">Link</a>
+              </p>
+            </div>
+            """
+        )
+
+    return f"""
+        <div style="margin: 0;">
+          {''.join(cards)}
+        </div>
+    """
+
+
+def render_weekly_story_cards(stories: List[Dict[str, object]] | None) -> str:
     if not stories:
         return ""
 
@@ -444,7 +706,28 @@ def render_story_cards(stories: List[Dict[str, object]] | None) -> str:
     """
 
 
-def format_operator_brief_html(operator_brief: Dict[str, object]) -> str:
+def format_daily_operator_brief_html(
+    operator_brief: Dict[str, object],
+    *,
+    story_limit: int = DAILY_STORY_LIMIT,
+) -> str:
+    date_str = local_now().strftime("%B %d, %Y")
+    stories = select_daily_stories(operator_brief, story_limit=story_limit)
+
+    html = f"""
+    <html>
+      <body style="font-family: Arial, sans-serif; line-height: 1.42; color: #222; max-width: 680px; margin: 0 auto; padding: 12px; background: #ffffff;">
+        <h2 style="margin: 0 0 4px 0; font-size: 22px; line-height: 1.25;">Daily AI Digest - {date_str}</h2>
+        <p style="margin: 0 0 8px 0; color:#444;">{escaped(build_daily_story_header(operator_brief, stories))}</p>
+        {render_daily_headlines(stories)}
+        {render_daily_story_cards(stories)}
+      </body>
+    </html>
+    """
+    return html
+
+
+def format_weekly_operator_brief_html(operator_brief: Dict[str, object]) -> str:
     date_str = local_now().strftime("%B %d, %Y")
     summary = operator_brief.get("summary", {}) or {}
     operator_moves = operator_brief.get("operator_moves", {}) or {}
@@ -453,7 +736,7 @@ def format_operator_brief_html(operator_brief: Dict[str, object]) -> str:
     html = f"""
     <html>
       <body style="font-family: Arial, sans-serif; line-height: 1.5; color: #222; max-width: 860px; margin: 0 auto; padding: 12px; background: #f8fafc;">
-        <h2 style="margin-bottom: 8px;">Daily AI Digest v2: Operator Cockpit</h2>
+        <h2 style="margin-bottom: 8px;">Weekly AI Digest - Operator Review</h2>
         <p style="margin-top: 0;"><strong>Date:</strong> {date_str}</p>
         <p style="margin: 0 0 16px 0;">
           {escaped(str(summary.get('raw_item_count', 0)))} raw signals normalized into
@@ -471,7 +754,7 @@ def format_operator_brief_html(operator_brief: Dict[str, object]) -> str:
           </p>
           <p style="margin: 0; font-size: 16px;">{escaped(operator_moves.get('top_insight', ''))}</p>
         </div>
-        {render_story_cards(story_cards)}
+        {render_weekly_story_cards(story_cards)}
         {render_action_footer(operator_moves)}
         {render_quality_flags(operator_brief.get("quality_eval", {}) or {})}
       </body>
@@ -480,8 +763,22 @@ def format_operator_brief_html(operator_brief: Dict[str, object]) -> str:
     return html
 
 
+def format_operator_brief_html(
+    operator_brief: Dict[str, object],
+    *,
+    mode: str = "daily",
+    story_limit: int = DAILY_STORY_LIMIT,
+) -> str:
+    normalized_mode = compact_text(mode).lower() or "daily"
+    if normalized_mode == "daily":
+        return format_daily_operator_brief_html(operator_brief, story_limit=story_limit)
+    if normalized_mode == "weekly":
+        return format_weekly_operator_brief_html(operator_brief)
+    raise ValueError("mode must be 'daily' or 'weekly'.")
+
+
 def format_operator_cockpit_html(operator_brief: Dict[str, object]) -> str:
-    return format_operator_brief_html(operator_brief)
+    return format_weekly_operator_brief_html(operator_brief)
 
 
 def format_digest_html(
@@ -489,60 +786,37 @@ def format_digest_html(
     top_insight: str,
     top_picks: List[Dict[str, object]] | None = None,
     action_brief: Dict[str, str] | None = None,
+    *,
+    story_limit: int = DAILY_STORY_LIMIT,
 ) -> str:
     counts = validate_digest_items(items)
-    grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
-    for item in items:
-        grouped[item["category"]].append(item)
-
+    sorted_items = sort_items_for_render(items)
+    surfaced_items = sorted_items[: max(1, story_limit)]
+    stories: List[Dict[str, object]] = []
+    for item in surfaced_items:
+        confidence = compact_text(item.get("confidence") or item.get("signal", "medium")).title()
+        stories.append(
+            {
+                "cluster_title": item.get("title", "Untitled"),
+                "canonical_url": item.get("url", "#"),
+                "source_names": [item.get("source") or CATEGORY_HEADINGS.get(item.get("category", ""), "Unknown source")],
+                "confidence": confidence,
+                "summary": item.get("summary", ""),
+                "why_it_matters": item.get("why_it_matters", ""),
+                "category": item.get("category", ""),
+                "priority_score": item.get("priority_score", 0.0),
+            }
+        )
     date_str = local_now().strftime("%B %d, %Y")
+    header = f"Showing {singular_plural(len(stories), 'story', 'stories')} from {singular_plural(len(items), 'item')}: {build_summary_line(counts)}"
 
     html = f"""
     <html>
-      <body style="font-family: Arial, sans-serif; line-height: 1.5; color: #222; max-width: 800px; margin: 0 auto; padding: 12px;">
-        <h2>Daily AI Digest v2</h2>
-        <p><strong>Date:</strong> {date_str}</p>
-        <p>{build_summary_line(counts)}</p>
-
-        {render_top_picks(top_picks)}
-        <div style="margin: 18px 0 24px 0; padding: 14px 16px; border-left: 4px solid #0b57d0; background: #f8fbff;">
-          <p style="margin: 0 0 6px 0; font-size: 13px; font-weight: bold; color: #0b57d0; letter-spacing: 0.02em;">
-            TOP INSIGHT
-          </p>
-          <p style="margin: 0; font-size: 16px;">{escaped(top_insight)}</p>
-        </div>
-    """
-
-    for category in SECTION_ORDER:
-        heading = CATEGORY_HEADINGS.get(category, category)
-        html += f"<h3>{heading}</h3>"
-
-        sorted_items = sort_items_for_render(grouped.get(category, []))
-        if not sorted_items:
-            html += (
-                f"<p style=\"margin: 0 0 16px 0; color: #666;\">"
-                f"<em>{escaped(EMPTY_SECTION_MESSAGES[category])}</em>"
-                f"</p>"
-            )
-            continue
-
-        for item in sorted_items:
-            badge_html = render_signal_badge(item.get("signal", "medium"))
-            html += f"""
-            <div style="margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid #ddd;">
-              {badge_html}
-              <p style="margin: 0 0 6px 0;">
-                <a href="{escaped(item['url'])}" style="font-size: 16px; font-weight: bold; color: #0b57d0; text-decoration: none;">
-                  {escaped(item['title'])}
-                </a>
-              </p>
-              <p style="margin: 0 0 8px 0;">{escaped(item['summary'])}</p>
-              <p style="margin: 0; color: #444;"><strong>Why it matters:</strong> {escaped(item['why_it_matters'])}</p>
-            </div>
-            """
-
-    html += render_action_footer(action_brief)
-    html += """
+      <body style="font-family: Arial, sans-serif; line-height: 1.42; color: #222; max-width: 680px; margin: 0 auto; padding: 12px;">
+        <h2 style="margin: 0 0 4px 0; font-size: 22px; line-height: 1.25;">Daily AI Digest - {date_str}</h2>
+        <p style="margin: 0 0 8px 0; color:#444;">{escaped(header)}</p>
+        {render_daily_headlines(stories)}
+        {render_daily_story_cards(stories)}
       </body>
     </html>
     """

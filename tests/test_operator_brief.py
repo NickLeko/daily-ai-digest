@@ -287,7 +287,7 @@ class OperatorBriefTests(unittest.TestCase):
         }
         self.assertEqual(len(picked_story_ids), 4)
 
-    def test_operator_brief_html_renders_operator_sections(self) -> None:
+    def test_operator_brief_html_defaults_to_scan_first_daily_email(self) -> None:
         items = [
             sample_item(
                 category="Regulatory",
@@ -320,10 +320,61 @@ class OperatorBriefTests(unittest.TestCase):
 
         html = format_operator_brief_html(brief)
 
+        self.assertIn("Daily AI Digest", html)
+        self.assertIn("HEADLINES", html)
+        self.assertIn("CMS final rule for prior authorization attachments", html)
+        self.assertIn("CMS Newsroom | Confidence: High", html)
+        self.assertNotIn("WHAT CHANGED SINCE YESTERDAY", html)
+        self.assertNotIn("TOP PICKS BY OBJECTIVE", html)
+        self.assertNotIn("THESIS TRACKER", html)
+        self.assertNotIn("MARKET MAP PULSE", html)
+        self.assertNotIn("TOP INSIGHT", html)
+        self.assertNotIn("OPERATOR MOVES", html)
+        self.assertNotIn("DIGEST QUALITY", html)
+        self.assertNotIn("OPERATOR STORY BOARD", html)
+        self.assertNotIn("RELIABILITY HIGH", html)
+        self.assertNotIn("Market buckets:", html)
+        self.assertNotIn("Thesis links:", html)
+
+    def test_operator_brief_html_weekly_mode_keeps_operator_sections(self) -> None:
+        items = [
+            sample_item(
+                category="Regulatory",
+                title="CMS final rule for prior authorization attachments",
+                url="https://www.cms.gov/newsroom/fact-sheets/prior-auth-attachments",
+                source="CMS Newsroom",
+                item_key="reg::prior-auth-attachments",
+                raw_text="Prior authorization, claims attachments, interoperability, and audit trail requirements.",
+                priority_score=40.0,
+                objective_scores={"career": 7.2, "build": 7.0, "content": 6.1, "regulatory": 9.1},
+                workflow_wedges=["prior auth", "interoperability"],
+            )
+        ]
+
+        with patch(
+            "operator_brief.build_strategy_brief",
+            return_value={
+                "top_insight": "For prior auth, attachment exchange matters because it creates a practical integration and auditability wedge.",
+                "content_angle": "Prior-auth ROI beats generic agent theater.",
+                "build_idea": "",
+                "interview_talking_point": "",
+                "watch_item": "",
+            },
+        ):
+            brief = build_operator_brief_artifact(
+                items,
+                memory={"version": 2, "events": [], "daily_briefs": []},
+                memory_snapshot={},
+            )
+
+        html = format_operator_brief_html(brief, mode="weekly")
+
         self.assertIn("WHAT CHANGED SINCE YESTERDAY", html)
         self.assertIn("THESIS TRACKER", html)
         self.assertIn("MARKET MAP PULSE", html)
         self.assertIn("OPERATOR STORY BOARD", html)
+        self.assertIn("OPERATOR MOVES", html)
+        self.assertIn("DIGEST QUALITY", html)
         self.assertIn("RELIABILITY HIGH", html)
 
 

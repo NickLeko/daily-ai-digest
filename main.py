@@ -3,6 +3,7 @@ import json
 
 from data import get_real_items
 from config import (
+    DIGEST_MODE,
     EMAIL_SUBJECT_PREFIX,
     MAX_ITEMS_PER_CATEGORY,
     OPERATOR_BRIEF_FILE_PATH,
@@ -37,12 +38,25 @@ def target_count_for_category(category: str) -> int:
     return MAX_ITEMS_PER_CATEGORY
 
 
+def normalize_digest_mode(mode: str) -> str:
+    normalized = str(mode or "daily").strip().lower()
+    if normalized not in {"daily", "weekly"}:
+        raise ValueError("Digest mode must be 'daily' or 'weekly'.")
+    return normalized
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Daily AI Digest.")
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Fetch and build local artifacts without sending email or mutating send/memory state.",
+    )
+    parser.add_argument(
+        "--digest-mode",
+        choices=["daily", "weekly"],
+        default=DIGEST_MODE,
+        help="Render the scan-first daily email or the analysis-heavy weekly digest.",
     )
     return parser.parse_args()
 
@@ -59,7 +73,8 @@ def save_artifacts(operator_brief: dict[str, object], html: str, cockpit_html: s
         f.write(cockpit_html)
 
 
-def run(*, dry_run: bool = False) -> None:
+def run(*, dry_run: bool = False, digest_mode: str = DIGEST_MODE) -> None:
+    digest_mode = normalize_digest_mode(digest_mode)
     memory = load_digest_memory()
 
     if dry_run:
@@ -88,7 +103,7 @@ def run(*, dry_run: bool = False) -> None:
         if count < target_count:
             log(
                 f"{category} section under target count: "
-                f"{count}/{target_count}. Fallback copy will render."
+                f"{count}/{target_count}. Continuing with available items."
             )
 
     log("Generating operator brief...")
@@ -103,12 +118,13 @@ def run(*, dry_run: bool = False) -> None:
         f"{operator_brief['summary']['raw_item_count']} raw items."
     )
 
-    log("Formatting HTML email...")
-    html = format_operator_brief_html(operator_brief)
+    log(f"Formatting {digest_mode} HTML email...")
+    html = format_operator_brief_html(operator_brief, mode=digest_mode)
     cockpit_html = format_operator_cockpit_html(operator_brief)
 
     subject_prefix = f"{EMAIL_SUBJECT_PREFIX.strip()} " if EMAIL_SUBJECT_PREFIX.strip() else ""
-    subject = f"{subject_prefix}Daily AI Digest - {local_now().strftime('%Y-%m-%d')}"
+    subject_label = "Weekly AI Digest" if digest_mode == "weekly" else "Daily AI Digest"
+    subject = f"{subject_prefix}{subject_label} - {local_now().strftime('%Y-%m-%d')}"
 
     save_artifacts(operator_brief, html, cockpit_html)
 
@@ -130,4 +146,4 @@ def run(*, dry_run: bool = False) -> None:
 
 if __name__ == "__main__":
     args = parse_args()
-    run(dry_run=args.dry_run)
+    run(dry_run=args.dry_run, digest_mode=args.digest_mode)

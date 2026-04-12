@@ -21,7 +21,7 @@ from data import (
     select_scored_items,
     select_regulatory_items,
 )
-from formatter import format_digest_html
+from formatter import format_digest_html, format_operator_brief_html
 from memory import build_memory_snapshot
 from scoring import attach_priority_scores, build_top_picks
 from summarize import (
@@ -79,7 +79,7 @@ def regulatory_item(
 
 
 class FormatterTests(unittest.TestCase):
-    def test_missing_news_section_renders_explicit_fallback(self) -> None:
+    def test_missing_news_section_keeps_daily_digest_compact(self) -> None:
         html = format_digest_html(
             [
                 render_item("Repo", "Repo One"),
@@ -88,12 +88,10 @@ class FormatterTests(unittest.TestCase):
             "Insight",
         )
 
-        self.assertIn("<h3>News</h3>", html)
-        self.assertIn(
-            "No high-signal general AI/healthcare news passed filters today.",
-            html,
-        )
+        self.assertIn("HEADLINES", html)
         self.assertIn("1 repo, 0 news items, and 1 regulatory update.", html)
+        self.assertNotIn("<h3>News</h3>", html)
+        self.assertNotIn("No high-signal general AI/healthcare news passed filters today.", html)
 
     def test_dynamic_header_count_correctness(self) -> None:
         html = format_digest_html(
@@ -111,7 +109,69 @@ class FormatterTests(unittest.TestCase):
         self.assertIn("3 repos, 1 news item, and 2 regulatory updates.", html)
         self.assertNotIn("3 news items", html)
 
-    def test_no_quality_regulatory_items_show_fallback(self) -> None:
+    def test_daily_digest_caps_stories_and_trims_story_sentences(self) -> None:
+        items = [
+            {
+                **render_item("News", f"News {index}"),
+                "summary": "First summary sentence. Second summary sentence should not render.",
+                "why_it_matters": "First why sentence. Second why sentence should not render.",
+                "priority_score": float(50 - index),
+            }
+            for index in range(5)
+        ]
+
+        html = format_digest_html(items, "Insight")
+
+        self.assertEqual(html.count("<strong>Summary:</strong>"), 4)
+        self.assertIn("First summary sentence.", html)
+        self.assertIn("First why sentence.", html)
+        self.assertNotIn("Second summary sentence should not render.", html)
+        self.assertNotIn("Second why sentence should not render.", html)
+        self.assertNotIn("News 4", html)
+
+    def test_daily_operator_digest_only_renders_specific_high_confidence_actions(self) -> None:
+        brief = {
+            "summary": {"raw_item_count": 2, "story_count": 2, "story_card_count": 2},
+            "story_cards": [
+                {
+                    "story_id": "specific",
+                    "cluster_title": "Specific action story",
+                    "canonical_url": "https://example.com/specific",
+                    "source_names": ["CMS Newsroom"],
+                    "confidence": "High",
+                    "summary": "Primary source summary. Extra summary noise.",
+                    "why_it_matters": "Prior-auth managers should adjust backlog scope this week. Extra why noise.",
+                    "action_suggestion": "Audit backlog, trading-partner, and control gaps in prior auth this week.",
+                    "category": "Regulatory",
+                    "workflow_wedges": ["prior auth"],
+                    "near_term_actionability": "high",
+                },
+                {
+                    "story_id": "generic",
+                    "cluster_title": "Generic action story",
+                    "canonical_url": "https://example.com/generic",
+                    "source_names": ["Vendor Blog"],
+                    "confidence": "Medium",
+                    "summary": "Vendor summary.",
+                    "why_it_matters": "Teams can review later.",
+                    "action_suggestion": "Keep an eye on this space.",
+                    "category": "News",
+                    "workflow_wedges": ["prior auth"],
+                    "near_term_actionability": "low",
+                },
+            ],
+            "stories": [],
+        }
+
+        html = format_operator_brief_html(brief)
+
+        self.assertIn("Action:", html)
+        self.assertIn("Audit backlog, trading-partner, and control gaps in prior auth this week", html)
+        self.assertNotIn("Keep an eye on this space.", html)
+        self.assertNotIn("Extra summary noise.", html)
+        self.assertNotIn("Extra why noise.", html)
+
+    def test_no_quality_regulatory_items_avoid_empty_section_noise(self) -> None:
         html = format_digest_html(
             [
                 render_item("Repo", "Repo One"),
@@ -120,14 +180,11 @@ class FormatterTests(unittest.TestCase):
             "Insight",
         )
 
-        self.assertIn("<h3>Regulatory Updates</h3>", html)
-        self.assertIn(
-            "No high-signal regulatory updates passed filters today.",
-            html,
-        )
+        self.assertNotIn("<h3>Regulatory Updates</h3>", html)
+        self.assertNotIn("No high-signal regulatory updates passed filters today.", html)
         self.assertIn("1 repo, 1 news item, and 0 regulatory updates.", html)
 
-    def test_top_picks_and_operator_moves_render_compact_sections(self) -> None:
+    def test_top_picks_and_operator_moves_are_removed_from_daily_digest(self) -> None:
         items = [
             {
                 **render_item("News", "Career Signal"),
@@ -182,12 +239,13 @@ class FormatterTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("TOP PICKS BY OBJECTIVE", html)
-        self.assertIn("Top item for career", html)
-        self.assertIn("OPERATOR MOVES", html)
-        self.assertIn("Build idea:", html)
+        self.assertNotIn("TOP PICKS BY OBJECTIVE", html)
+        self.assertNotIn("Top item for career", html)
+        self.assertNotIn("OPERATOR MOVES", html)
+        self.assertNotIn("Build idea:", html)
+        self.assertIn("HEADLINES", html)
 
-    def test_top_picks_render_empty_slot_message(self) -> None:
+    def test_top_picks_empty_slot_message_is_not_daily_email_noise(self) -> None:
         html = format_digest_html(
             [render_item("News", "News One")],
             "Insight",
@@ -203,8 +261,8 @@ class FormatterTests(unittest.TestCase):
             ],
         )
 
-        self.assertIn("Top item for regulatory", html)
-        self.assertIn("No high-signal regulatory item today.", html)
+        self.assertNotIn("Top item for regulatory", html)
+        self.assertNotIn("No high-signal regulatory item today.", html)
         self.assertNotIn('href="#"', html)
 
     def test_formatter_escapes_dynamic_html_content(self) -> None:
@@ -232,8 +290,8 @@ class FormatterTests(unittest.TestCase):
         self.assertIn("&lt;Unsafe Title&gt;", html)
         self.assertIn("Summary with &lt;b&gt;tag&lt;/b&gt;.", html)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
-        self.assertIn("&lt;Unsafe Pick&gt;", html)
-        self.assertIn("https://example.com/?q=&lt;unsafe&gt;", html)
+        self.assertNotIn("&lt;Unsafe Pick&gt;", html)
+        self.assertNotIn("Ship &lt;fast&gt;", html)
 
 
 class RegulatoryKeywordTests(unittest.TestCase):

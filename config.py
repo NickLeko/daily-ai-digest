@@ -54,6 +54,9 @@ TO_EMAIL = get_env("TO_EMAIL", required=False, default="")
 EMAIL_SUBJECT_PREFIX = get_env(
     "EMAIL_SUBJECT_PREFIX", required=False, default=""
 )
+DIGEST_MODE = get_env(
+    "DIGEST_MODE", required=False, default="daily"
+).strip().lower()
 
 GITHUB_TOKEN = get_env("GITHUB_TOKEN", required=False, default="")
 NEWS_FEED_URLS = [
