@@ -42,7 +42,9 @@ It still runs on the existing once-per-day pipeline. The daily email keeps the h
 
 ## Digest modes
 
-The daily email is intentionally minimal:
+`DIGEST_MODE` selects the email renderer when `main.py` runs. It defaults to `daily`, accepts `daily` or `weekly`, and can be overridden for a single run with `--digest-mode`.
+
+Daily mode is skim-first and article-first. It keeps the email intentionally minimal:
 
 - Title/date
 - One-line story and item counts
@@ -57,7 +59,7 @@ Daily story cards include:
 - One-sentence why-it-matters
 - Link
 
-The weekly mode and local cockpit are built from the same structured brief and can include the heavier operator review:
+Weekly mode is the heavier operator review. It uses the same structured brief as daily mode and can include:
 
 - What actually changed since yesterday?
 - Which themes are strengthening or weakening?
