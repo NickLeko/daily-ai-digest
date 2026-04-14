@@ -244,6 +244,67 @@ HEALTHCARE_CONTEXT_KEYWORDS = [
     "interoperability",
 ]
 
+REPO_STRONG_HEALTHCARE_ANCHOR_KEYWORDS = [
+    "healthcare",
+    "health care",
+    "health system",
+    "provider",
+    "payer",
+    "hospital",
+    "clinic",
+    "clinical",
+    "medical",
+    "patient",
+    "ehr",
+    "epic",
+    "cerner",
+    "fhir",
+    "hl7",
+    "tefca",
+    "uscdi",
+    "cms",
+    "onc",
+    "hipaa",
+    "prior authorization",
+    "prior auth",
+    "utilization management",
+    "utilization review",
+    "claims attachments",
+    "denials",
+    "denial",
+    "revenue cycle",
+    "rcm",
+    "referral",
+    "patient intake",
+    "benefits verification",
+    "ambient",
+    "scribe",
+    "clinical note",
+    "note capture",
+    "patient access",
+    "care coordination",
+]
+
+REPO_CONTEXT_REQUIRED_WEDGE_KEYWORDS = [
+    "documentation",
+    "scheduling",
+    "appointment",
+    "operations",
+    "admin",
+    "forms",
+    "workflow automation",
+    "api",
+    "apis",
+    "data exchange",
+    "interoperability",
+]
+
+REPO_HEALTHCARE_THEME_KEYS = {
+    "healthcare_ai_pm",
+    "healthcare_admin_automation",
+    "low_reg_friction_wedges",
+}
+
 BUYER_OPERATOR_KEYWORDS = [
     "operations",
     "operator",
@@ -314,8 +375,17 @@ GENERIC_DEVTOOL_KEYWORDS = [
     "wrapper",
     "api wrapper",
     "api client",
+    "codebase intelligence",
+    "code intelligence",
+    "codebase",
+    "connector",
+    "connectors",
     "cli",
     "command line",
+    "dead code",
+    "developer workflow",
+    "developer workflows",
+    "git analytics",
     "session manager",
     "coding agent",
     "developer tool",
@@ -353,26 +423,6 @@ SPECULATIVE_LOW_ROI_KEYWORDS = [
     "thought leadership",
     "could someday",
 ]
-
-HEALTHCARE_REPO_EXEMPTION_KEYWORDS = [
-    "prior authorization",
-    "prior auth",
-    "claims",
-    "denials",
-    "referral",
-    "intake",
-    "documentation",
-    "ambient",
-    "scheduling",
-    "care coordination",
-    "fhir",
-    "interoperability",
-    "hipaa",
-    "ehr",
-    "epic",
-    "tefca",
-]
-
 
 def normalize_text(value: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", (value or "").lower()))
@@ -421,6 +471,28 @@ def extract_theme_hits(item: DigestItem) -> Dict[str, List[str]]:
     return hits
 
 
+def repo_has_strong_healthcare_anchor(text: str) -> bool:
+    return bool(matched_keywords(REPO_STRONG_HEALTHCARE_ANCHOR_KEYWORDS, text))
+
+
+def filter_theme_hits_for_item(
+    item: DigestItem,
+    theme_hits: Dict[str, List[str]],
+) -> Dict[str, List[str]]:
+    if item.get("category") != "Repo":
+        return theme_hits
+
+    text = item_text_blob(item)
+    if repo_has_strong_healthcare_anchor(text):
+        return theme_hits
+
+    return {
+        theme_key: hits
+        for theme_key, hits in theme_hits.items()
+        if theme_key not in REPO_HEALTHCARE_THEME_KEYS
+    }
+
+
 def extract_entity_keys(item: DigestItem) -> List[str]:
     text = item_text_blob(item)
     entity_keys = set()
@@ -451,12 +523,26 @@ def extract_entity_keys(item: DigestItem) -> List[str]:
     return sorted(entity_keys)
 
 
-def extract_workflow_wedge_hits(text: str) -> Dict[str, List[str]]:
+def extract_workflow_wedge_hits(text: str, *, category: str = "") -> Dict[str, List[str]]:
     hits: Dict[str, List[str]] = {}
     for wedge_key, rule in WORKFLOW_WEDGE_RULES.items():
         wedge_hits = matched_keywords(rule.get("keywords", []), text)
         if wedge_hits:
             hits[wedge_key] = wedge_hits
+    if category == "Repo" and not repo_has_strong_healthcare_anchor(text):
+        context_required = {
+            normalize_text(keyword)
+            for keyword in REPO_CONTEXT_REQUIRED_WEDGE_KEYWORDS
+        }
+        hits = {
+            wedge_key: [
+                keyword
+                for keyword in wedge_hits
+                if normalize_text(keyword) not in context_required
+            ]
+            for wedge_key, wedge_hits in hits.items()
+        }
+        hits = {wedge_key: wedge_hits for wedge_key, wedge_hits in hits.items() if wedge_hits}
     return hits
 
 
@@ -479,6 +565,9 @@ def operator_relevance_level(
     theme_hits: Dict[str, List[str]],
     wedge_hits: Dict[str, List[str]],
 ) -> str:
+    if item.get("category") == "Repo" and not wedge_hits and not repo_has_strong_healthcare_anchor(text):
+        return "low"
+
     operator_hits = matched_keywords(BUYER_OPERATOR_KEYWORDS, text)
     if wedge_hits and (
         operator_hits
@@ -537,12 +626,13 @@ def repo_cap_exempt(
     )
     return bool(
         wedge_hits
-        or matched_keywords(HEALTHCARE_REPO_EXEMPTION_KEYWORDS, text)
+        or repo_has_strong_healthcare_anchor(text)
         or ("healthcare_admin_automation" in theme_hits)
         or ("healthcare_ai_pm" in theme_hits and governance_hits)
         or (
             governance_hits
             and matched_keywords(INTEROPERABILITY_REIMBURSEMENT_KEYWORDS, text)
+            and repo_has_strong_healthcare_anchor(text)
         )
     )
 
@@ -568,9 +658,15 @@ def build_item_profile(
     theme_hits: Dict[str, List[str]],
 ) -> Dict[str, Any]:
     text = item_text_blob(item)
-    wedge_hits = extract_workflow_wedge_hits(text)
+    wedge_hits = extract_workflow_wedge_hits(
+        text,
+        category=str(item.get("category", "") or ""),
+    )
     workflow_wedges = workflow_wedge_labels(wedge_hits)
-    explicit_healthcare_context = has_explicit_healthcare_context(text)
+    if item.get("category") == "Repo":
+        explicit_healthcare_context = repo_has_strong_healthcare_anchor(text)
+    else:
+        explicit_healthcare_context = has_explicit_healthcare_context(text)
     interoperability_hits = matched_keywords(INTEROPERABILITY_REIMBURSEMENT_KEYWORDS, text)
     generic_devtool = is_generic_devtool_item(
         item,
@@ -803,7 +899,7 @@ def score_item(
     memory: DigestMemory,
     now: datetime,
 ) -> DigestItem:
-    theme_hits = extract_theme_hits(item)
+    theme_hits = filter_theme_hits_for_item(item, extract_theme_hits(item))
     matched_themes = sorted(theme_hits.keys())
     item_profile = build_item_profile(item, theme_hits=theme_hits)
     entity_keys = extract_entity_keys(item)

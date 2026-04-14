@@ -21,8 +21,9 @@ from data import (
     select_scored_items,
     select_regulatory_items,
 )
-from formatter import format_digest_html, format_operator_brief_html
+from formatter import format_digest_html, format_operator_brief_html, select_daily_stories
 from memory import build_memory_snapshot
+from operator_brief import select_story_cards
 from scoring import attach_priority_scores, build_top_picks
 from summarize import (
     fallback_digest_strategy,
@@ -170,6 +171,77 @@ class FormatterTests(unittest.TestCase):
         self.assertNotIn("Keep an eye on this space.", html)
         self.assertNotIn("Extra summary noise.", html)
         self.assertNotIn("Extra why noise.", html)
+
+    def test_daily_operator_digest_does_not_backfill_beyond_story_cards(self) -> None:
+        selected_story = {
+            "story_id": "selected",
+            "cluster_title": "CMS prior auth evidence exchange",
+            "canonical_url": "https://example.com/selected",
+            "source_names": ["CMS Newsroom"],
+            "confidence": "High",
+            "summary": "Selected summary.",
+            "why_it_matters": "Prior-auth managers should audit evidence exchange this week.",
+            "action_suggestion": "Audit one prior auth evidence handoff this week.",
+            "category": "Regulatory",
+            "workflow_wedges": ["prior auth"],
+            "near_term_actionability": "high",
+        }
+        backfill_story = {
+            "story_id": "backfill",
+            "cluster_title": "Generic agent connector repo",
+            "canonical_url": "https://example.com/backfill",
+            "source_names": ["GitHub Search"],
+            "confidence": "High",
+            "summary": "Generic repo summary.",
+            "why_it_matters": "Generic why.",
+            "action_suggestion": "Review this later.",
+            "category": "Repo",
+        }
+        brief = {
+            "summary": {"raw_item_count": 2, "story_count": 2, "story_card_count": 1},
+            "story_cards": [selected_story],
+            "stories": [selected_story, backfill_story],
+        }
+
+        selected = select_daily_stories(brief, story_limit=4)
+        html = format_operator_brief_html(brief, story_limit=4)
+
+        self.assertEqual([story["story_id"] for story in selected], ["selected"])
+        self.assertIn("1 story from 2 items", html)
+        self.assertIn("CMS prior auth evidence exchange", html)
+        self.assertNotIn("Generic agent connector repo", html)
+
+    def test_daily_operator_digest_suppresses_near_duplicate_headlines(self) -> None:
+        brief = {
+            "summary": {"raw_item_count": 2, "story_count": 2, "story_card_count": 2},
+            "story_cards": [
+                {
+                    "story_id": "first",
+                    "cluster_title": "CMS final rule tightens prior auth evidence exchange",
+                    "canonical_url": "https://example.com/first",
+                    "source_names": ["CMS Newsroom"],
+                    "confidence": "High",
+                    "summary": "First summary.",
+                    "why_it_matters": "Prior-auth managers should audit evidence exchange this week.",
+                    "category": "Regulatory",
+                },
+                {
+                    "story_id": "second",
+                    "cluster_title": "CMS final rule tightens prior authorization evidence exchange",
+                    "canonical_url": "https://example.com/second",
+                    "source_names": ["Federal Register"],
+                    "confidence": "High",
+                    "summary": "Second summary.",
+                    "why_it_matters": "Prior-auth managers should audit evidence exchange this week.",
+                    "category": "Regulatory",
+                },
+            ],
+        }
+
+        selected = select_daily_stories(brief, story_limit=4)
+
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0]["story_id"], "first")
 
     def test_no_quality_regulatory_items_avoid_empty_section_noise(self) -> None:
         html = format_digest_html(
@@ -575,6 +647,27 @@ class PersonalizationScoringTests(unittest.TestCase):
         self.assertTrue(scored[1]["is_generic_devtool"])
         self.assertGreater(scored[0]["priority_score"], scored[1]["priority_score"])
 
+    def test_generic_codebase_docs_repo_does_not_become_healthcare_documentation_wedge(self) -> None:
+        now = datetime(2026, 4, 3, 15, 0, tzinfo=timezone.utc)
+        item = {
+            "category": "Repo",
+            "title": "repowise-dev/repowise",
+            "url": "https://example.com/repo/repowise",
+            "raw_text": "Codebase intelligence for AI-assisted engineering teams with auto-generated documentation, git analytics, dead code detection, architectural decisions, and MCP.",
+            "item_key": "repo::repowise",
+            "published_at": now - timedelta(hours=1),
+            "source": "GitHub Search",
+        }
+
+        scored = attach_priority_scores([item], {"version": 1, "events": []}, now=now)[0]
+
+        self.assertNotIn("healthcare_admin_automation", scored["matched_themes"])
+        self.assertNotIn("low_reg_friction_wedges", scored["matched_themes"])
+        self.assertEqual(scored["workflow_wedges"], [])
+        self.assertFalse(scored["explicit_healthcare_context"])
+        self.assertEqual(scored["operator_relevance"], "low")
+        self.assertTrue(scored["is_generic_devtool"])
+
     def test_repeat_detection_lowers_novelty_but_keeps_theme_momentum(self) -> None:
         now = datetime(2026, 4, 3, 15, 0, tzinfo=timezone.utc)
         item = {
@@ -828,6 +921,48 @@ class PersonalizationScoringTests(unittest.TestCase):
             sum(1 for item in selected if item["is_generic_devtool"]),
             1,
         )
+
+    def test_story_cards_filter_low_fit_repo_even_when_score_is_high(self) -> None:
+        weak_repo = {
+            "story_id": "weak-repo",
+            "cluster_title": "Generic agent connector repo",
+            "category": "Repo",
+            "story_score": 42.0,
+            "priority_score": 42.0,
+            "reliability_label": "High",
+            "supporting_item_count": 1,
+            "objective_scores": {"career": 4.0, "build": 7.4, "content": 4.5, "regulatory": 2.0},
+            "operator_relevance": "low",
+            "near_term_actionability": "low",
+            "workflow_wedges": [],
+            "matched_themes": ["agents_workflows"],
+            "watchlist_matches": [],
+            "is_generic_devtool": True,
+            "generic_repo_cap_exempt": False,
+            "docs_only_repo": False,
+        }
+        workflow_repo = {
+            "story_id": "workflow-repo",
+            "cluster_title": "Prior auth audit-lane repo",
+            "category": "Repo",
+            "story_score": 26.0,
+            "priority_score": 26.0,
+            "reliability_label": "High",
+            "supporting_item_count": 1,
+            "objective_scores": {"career": 6.2, "build": 6.9, "content": 5.2, "regulatory": 4.5},
+            "operator_relevance": "high",
+            "near_term_actionability": "high",
+            "workflow_wedges": ["prior auth"],
+            "matched_themes": ["healthcare_admin_automation"],
+            "watchlist_matches": [],
+            "is_generic_devtool": False,
+            "generic_repo_cap_exempt": False,
+            "docs_only_repo": False,
+        }
+
+        selected = select_story_cards([weak_repo, workflow_repo])
+
+        self.assertEqual([story["story_id"] for story in selected], ["workflow-repo"])
 
 
 class DigestStrategyTests(unittest.TestCase):

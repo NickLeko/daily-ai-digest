@@ -83,6 +83,20 @@ THIS_WEEK_TERMS = {
     "friday",
 }
 
+RENDER_TITLE_STOPWORDS = {
+    "and",
+    "for",
+    "from",
+    "into",
+    "news",
+    "repo",
+    "signal",
+    "the",
+    "this",
+    "update",
+    "with",
+}
+
 
 def render_signal_badge(signal: str) -> str:
     style = SIGNAL_STYLES.get(signal.lower(), SIGNAL_STYLES["medium"])
@@ -468,6 +482,35 @@ def story_url_for_render(story: Dict[str, object]) -> str:
     return compact_text(story.get("canonical_url") or story.get("url") or "#")
 
 
+def render_title_tokens(story: Dict[str, object]) -> set[str]:
+    return {
+        token
+        for token in normalized_words(story_title_for_render(story))
+        if len(token) > 2 and token not in RENDER_TITLE_STOPWORDS
+    }
+
+
+def stories_are_render_duplicates(
+    story: Dict[str, object],
+    selected_stories: List[Dict[str, object]],
+) -> bool:
+    story_url = story_url_for_render(story)
+    story_title = story_title_for_render(story).lower()
+    story_tokens = render_title_tokens(story)
+
+    for selected in selected_stories:
+        if story_url != "#" and story_url == story_url_for_render(selected):
+            return True
+        if story_title and story_title == story_title_for_render(selected).lower():
+            return True
+        selected_tokens = render_title_tokens(selected)
+        if story_tokens and selected_tokens:
+            overlap = len(story_tokens & selected_tokens) / max(len(story_tokens), len(selected_tokens))
+            if overlap >= 0.8:
+                return True
+    return False
+
+
 def story_source_names(story: Dict[str, object]) -> List[str]:
     raw_sources = story.get("source_names") or []
     if not isinstance(raw_sources, list):
@@ -533,20 +576,21 @@ def select_daily_stories(
     story_limit: int = DAILY_STORY_LIMIT,
 ) -> List[Dict[str, object]]:
     story_limit = max(1, story_limit)
-    candidates: List[Dict[str, object]] = []
-    for source_key in ("story_cards", "stories"):
-        raw_stories = operator_brief.get(source_key, []) or []
-        if not isinstance(raw_stories, list):
-            continue
-        for story in raw_stories:
-            if isinstance(story, dict):
-                candidates.append(story)
+    story_cards = operator_brief.get("story_cards")
+    source_stories = story_cards if isinstance(story_cards, list) else operator_brief.get("stories", [])
+    candidates = [
+        story
+        for story in (source_stories or [])
+        if isinstance(story, dict)
+    ]
 
     selected: List[Dict[str, object]] = []
     seen: set[str] = set()
     for story in candidates:
         story_id = story_id_for_render(story)
         if story_id and story_id in seen:
+            continue
+        if stories_are_render_duplicates(story, selected):
             continue
         if story_id:
             seen.add(story_id)

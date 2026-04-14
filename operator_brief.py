@@ -120,6 +120,15 @@ OBJECTIVE_MIN_SCORES = {
 }
 
 QUALITY_WARNING_LIMIT = 5
+STORY_STRONG_SCORE = 28.0
+STORY_STRONG_OBJECTIVE_SCORE = 6.7
+
+STORY_TARGET_THEME_KEYS = {
+    "healthcare_ai_pm",
+    "healthcare_admin_automation",
+    "low_reg_friction_wedges",
+    "llm_eval_rag_governance_safety",
+}
 
 
 def load_json_config(path: str, default: Dict[str, Any]) -> Dict[str, Any]:
@@ -1086,18 +1095,6 @@ def apply_change_status(
 
 
 def select_story_cards(stories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    def surface_worthy(story: Dict[str, Any]) -> bool:
-        max_objective = max((story.get("objective_scores", {}) or {}).values(), default=0.0)
-        if float(story.get("story_score", 0.0) or 0.0) >= 25.0:
-            return True
-        if float(max_objective or 0.0) >= 6.0:
-            return True
-        if int(story.get("supporting_item_count", 0) or 0) >= 2:
-            return True
-        if story.get("category") == "Regulatory":
-            return True
-        return False
-
     selected: List[Dict[str, Any]] = []
     per_category_cap = {"Repo": 2, "News": 3, "Regulatory": 2}
     category_counts = Counter()
@@ -1108,7 +1105,7 @@ def select_story_cards(stories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 story
                 for story in stories
                 if story.get("category") == category
-                and surface_worthy(story)
+                and story_is_surface_worthy(story)
                 and category_counts[category] < per_category_cap.get(category, OPERATOR_STORY_LIMIT)
             ),
             None,
@@ -1120,7 +1117,7 @@ def select_story_cards(stories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for story in stories:
         if story in selected:
             continue
-        if not surface_worthy(story):
+        if not story_is_surface_worthy(story):
             continue
         category = str(story.get("category", "") or "")
         if category_counts[category] >= per_category_cap.get(category, OPERATOR_STORY_LIMIT):
@@ -1373,6 +1370,88 @@ def build_watchlist_hits(
         )
 
     return hits[:WATCHLIST_STORY_LIMIT]
+
+
+def max_story_objective_score(story: Dict[str, Any]) -> float:
+    return float(max((story.get("objective_scores", {}) or {}).values(), default=0.0) or 0.0)
+
+
+def story_has_target_fit(story: Dict[str, Any]) -> bool:
+    category = str(story.get("category", "") or "")
+    operator_relevance = str(story.get("operator_relevance", "low") or "low")
+    actionability = str(story.get("near_term_actionability", "low") or "low")
+    workflow_wedges = [str(value) for value in story.get("workflow_wedges", []) or []]
+    matched_themes = {str(value) for value in story.get("matched_themes", []) or []}
+    has_watchlist_match = bool(story.get("watchlist_matches"))
+
+    if bool(story.get("docs_only_repo")):
+        return False
+
+    if category == "Regulatory":
+        regulatory_score = float((story.get("objective_scores", {}) or {}).get("regulatory", 0.0) or 0.0)
+        return (
+            regulatory_score >= OBJECTIVE_MIN_SCORES["regulatory"]
+            or bool(workflow_wedges)
+            or operator_relevance in {"high", "medium"}
+        )
+
+    if category == "Repo":
+        if bool(story.get("is_generic_devtool")) and not bool(story.get("generic_repo_cap_exempt")):
+            return has_watchlist_match or (
+                "llm_eval_rag_governance_safety" in matched_themes
+                and max_story_objective_score(story) >= 7.2
+                and actionability != "low"
+            )
+        return (
+            has_watchlist_match
+            or bool(workflow_wedges)
+            or operator_relevance == "high"
+            or (
+                "llm_eval_rag_governance_safety" in matched_themes
+                and max_story_objective_score(story) >= STORY_STRONG_OBJECTIVE_SCORE
+                and actionability != "low"
+            )
+        )
+
+    if category == "News":
+        return (
+            operator_relevance in {"high", "medium"}
+            and (
+                bool(workflow_wedges)
+                or actionability in {"high", "medium"}
+                or bool(matched_themes & STORY_TARGET_THEME_KEYS)
+            )
+        )
+
+    return False
+
+
+def story_is_surface_worthy(story: Dict[str, Any]) -> bool:
+    if not story_has_target_fit(story):
+        return False
+    if story.get("reliability_label") == "Low" and int(story.get("supporting_item_count", 0) or 0) < 2:
+        return False
+
+    story_score = float(story.get("story_score", 0.0) or 0.0)
+    max_objective = max_story_objective_score(story)
+    actionability = str(story.get("near_term_actionability", "low") or "low")
+    support_count = int(story.get("supporting_item_count", 0) or 0)
+
+    if story.get("category") == "Regulatory":
+        regulatory_score = float((story.get("objective_scores", {}) or {}).get("regulatory", 0.0) or 0.0)
+        return (
+            story_score >= 18.0
+            or regulatory_score >= OBJECTIVE_MIN_SCORES["regulatory"]
+            or support_count >= 2
+        )
+
+    if story_score >= STORY_STRONG_SCORE:
+        return True
+    if max_objective >= STORY_STRONG_OBJECTIVE_SCORE and actionability != "low":
+        return True
+    if support_count >= 2 and actionability in {"high", "medium"}:
+        return True
+    return False
 
 
 def repeated_sentence_shells(lines: List[str]) -> int:
