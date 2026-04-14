@@ -23,7 +23,11 @@ from memory import (
     record_digest_items,
     record_operator_brief,
 )
-from selection_audit import SELECTION_AUDIT_FILE_PATH, write_selection_audit
+from selection_audit import (
+    SELECTION_AUDIT_FILE_PATH,
+    SELECTION_AUDIT_MARKDOWN_FILE_PATH,
+    write_selection_audit,
+)
 from state import already_sent_today, local_now, mark_sent
 from summarize import summarize_items
 
@@ -132,6 +136,7 @@ def run(*, dry_run: bool = False, digest_mode: str = DIGEST_MODE) -> None:
     if dry_run:
         write_selection_audit(operator_brief)
         log(f"Selection audit saved to {SELECTION_AUDIT_FILE_PATH}")
+        log(f"Selection audit summary saved to {SELECTION_AUDIT_MARKDOWN_FILE_PATH}")
         log("Dry run complete. Local artifacts were written and no email or state updates were performed.")
         return
 

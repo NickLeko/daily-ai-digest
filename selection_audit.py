@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from typing import Any, Dict, List
 
 from formatter import (
@@ -18,6 +19,7 @@ from state import local_now
 
 
 SELECTION_AUDIT_FILE_PATH = "latest_selection_audit.json"
+SELECTION_AUDIT_MARKDOWN_FILE_PATH = "latest_selection_audit.md"
 
 
 def rounded_scores(scores: Dict[str, Any] | None) -> Dict[str, float]:
@@ -263,12 +265,180 @@ def build_selection_audit(operator_brief: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def markdown_escape(value: Any) -> str:
+    return str(value or "").replace("\n", " ").strip()
+
+
+def story_score(row: Dict[str, Any]) -> float:
+    scores = row.get("score_summary", {}) or {}
+    return float(scores.get("story_score", scores.get("priority_score", 0.0)) or 0.0)
+
+
+def compact_reason(reason: str) -> str:
+    return reason.replace("Filtered because ", "").replace("Selected because ", "").strip()
+
+
+def target_fit_label(row: Dict[str, Any]) -> str:
+    target_fit = row.get("target_fit", {}) or {}
+    status = "pass" if target_fit.get("passes") else "fail"
+    operator_relevance = target_fit.get("operator_relevance", "")
+    actionability = target_fit.get("near_term_actionability", "")
+    wedges = ", ".join(target_fit.get("workflow_wedges", []) or [])
+    suffix = f"; {wedges}" if wedges else ""
+    return f"{status}; relevance={operator_relevance}; actionability={actionability}{suffix}"
+
+
+def daily_label(row: Dict[str, Any]) -> str:
+    daily = row.get("shorter_digest_selection", {}) or {}
+    status = daily.get("status", "not_considered")
+    reason = daily.get("reason", "")
+    if status == "selected":
+        return "daily selected"
+    if not reason:
+        return str(status)
+    return f"{status}: {compact_reason(str(reason))}"
+
+
+def source_label(row: Dict[str, Any]) -> str:
+    source_type = markdown_escape(row.get("source_type", ""))
+    sources = row.get("sources", []) or []
+    if sources:
+        return f"{source_type} from {', '.join(markdown_escape(source) for source in sources[:2])}"
+    source = markdown_escape(row.get("source", ""))
+    return f"{source_type} from {source}" if source else source_type
+
+
+def render_story_line(row: Dict[str, Any]) -> str:
+    title = markdown_escape(row.get("title", "Untitled"))
+    score = story_score(row)
+    return (
+        f"- {title} ({source_label(row)}): score {score:.2f}; "
+        f"target {target_fit_label(row)}; {daily_label(row)}"
+    )
+
+
+def render_filtered_line(row: Dict[str, Any]) -> str:
+    title = markdown_escape(row.get("title", "Untitled"))
+    score = story_score(row)
+    reason = compact_reason(str(row.get("primary_reason", "")))
+    return (
+        f"- {title}: score {score:.2f}; target {target_fit_label(row)}; "
+        f"reason: {reason}"
+    )
+
+
+def render_duplicate_line(row: Dict[str, Any]) -> str:
+    title = markdown_escape(row.get("title", "Untitled"))
+    duplicate = row.get("duplicate_suppression", {}) or {}
+    support_count = int(duplicate.get("supporting_item_count", 0) or 0)
+    daily_duplicate = bool(duplicate.get("daily_render_duplicate"))
+    details = []
+    if support_count > 1:
+        details.append(f"{support_count} supporting items clustered")
+    if daily_duplicate:
+        details.append("daily render duplicate suppressed")
+    detail = "; ".join(details) if details else "duplicate suppression affected this row"
+    return f"- {title}: {detail}"
+
+
+def render_selection_audit_markdown(audit: Dict[str, Any]) -> str:
+    stories = [row for row in audit.get("stories", []) or [] if isinstance(row, dict)]
+    selected = [row for row in stories if row.get("selected")]
+    filtered = [row for row in stories if not row.get("selected")]
+    daily_selected = [
+        row
+        for row in stories
+        if (row.get("shorter_digest_selection", {}) or {}).get("selected")
+    ]
+    daily_filtered = [
+        row
+        for row in stories
+        if (row.get("shorter_digest_selection", {}) or {}).get("status") == "filtered"
+    ]
+    target_fit_filtered = [
+        row
+        for row in filtered
+        if not (row.get("target_fit", {}) or {}).get("passes")
+    ]
+    duplicate_rows = [
+        row
+        for row in stories
+        if (row.get("duplicate_suppression", {}) or {}).get("affected")
+    ]
+    backfill_filtered = [
+        row
+        for row in stories
+        if (row.get("shorter_digest_selection", {}) or {}).get("backfill_affected")
+    ]
+    reason_counts = Counter(str(row.get("primary_reason", "") or "Unknown") for row in filtered)
+    daily_limit_count = sum(
+        1
+        for row in daily_filtered
+        if "shorter daily story limit" in str(
+            (row.get("shorter_digest_selection", {}) or {}).get("reason", "")
+        )
+    )
+    daily_duplicate_count = sum(
+        1
+        for row in daily_filtered
+        if bool((row.get("shorter_digest_selection", {}) or {}).get("duplicate_suppression_affected"))
+    )
+
+    lines = [
+        "# Selection Audit Summary",
+        "",
+        "## Summary",
+        f"- Stories: {len(selected)} surfaced, {len(filtered)} filtered.",
+        (
+            f"- Daily digest: {len(daily_selected)} selected, {len(daily_filtered)} filtered "
+            f"after story-card selection, limit {audit.get('summary', {}).get('daily_story_limit', 0)}."
+        ),
+        (
+            f"- Short-digest effect: {daily_limit_count} filtered by daily limit, "
+            f"{daily_duplicate_count} duplicate-suppressed, {len(backfill_filtered)} not backfilled from all stories."
+        ),
+        f"- Target-fit failures among filtered stories: {len(target_fit_filtered)}.",
+        "",
+        "## Surfaced Stories",
+    ]
+
+    if selected:
+        lines.extend(render_story_line(row) for row in selected[:6])
+    else:
+        lines.append("- None.")
+
+    lines.extend(["", "## Top Filtered Near-Misses"])
+    near_misses = sorted(filtered, key=story_score, reverse=True)[:5]
+    if near_misses:
+        lines.extend(render_filtered_line(row) for row in near_misses)
+    else:
+        lines.append("- None.")
+
+    lines.extend(["", "## Duplicate-Suppressed Items"])
+    if duplicate_rows:
+        lines.extend(render_duplicate_line(row) for row in duplicate_rows[:5])
+    else:
+        lines.append("- None.")
+
+    lines.extend(["", "## Most Common Exclusion Reasons"])
+    if reason_counts:
+        for reason, count in reason_counts.most_common(5):
+            lines.append(f"- {count}x {compact_reason(reason)}")
+    else:
+        lines.append("- None.")
+
+    return "\n".join(lines) + "\n"
+
+
 def write_selection_audit(
     operator_brief: Dict[str, Any],
     *,
     path: str = SELECTION_AUDIT_FILE_PATH,
+    markdown_path: str = SELECTION_AUDIT_MARKDOWN_FILE_PATH,
 ) -> Dict[str, Any]:
     audit = build_selection_audit(operator_brief)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(audit, f, indent=2)
+    with open(markdown_path, "w", encoding="utf-8") as f:
+        f.write(render_selection_audit_markdown(audit))
     return audit

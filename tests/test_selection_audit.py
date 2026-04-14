@@ -1,6 +1,8 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
-from selection_audit import build_selection_audit
+from selection_audit import build_selection_audit, render_selection_audit_markdown, write_selection_audit
 
 
 def story(
@@ -111,6 +113,16 @@ class SelectionAuditTests(unittest.TestCase):
         self.assertEqual(items["item-selected"]["status"], "selected")
         self.assertEqual(items["item-filtered"]["status"], "filtered")
 
+        markdown = render_selection_audit_markdown(audit)
+
+        self.assertIn("# Selection Audit Summary", markdown)
+        self.assertIn("## Surfaced Stories", markdown)
+        self.assertIn("Selected prior auth story", markdown)
+        self.assertIn("## Top Filtered Near-Misses", markdown)
+        self.assertIn("Generic market news", markdown)
+        self.assertIn("## Most Common Exclusion Reasons", markdown)
+        self.assertIn("Target-fit failures among filtered stories: 1", markdown)
+
     def test_selection_audit_reports_repo_gate_and_daily_limit(self) -> None:
         cards = [
             story("alpha", "Prior auth operating update", category="News"),
@@ -143,6 +155,34 @@ class SelectionAuditTests(unittest.TestCase):
             "generic_repo_not_exempted",
         )
         self.assertTrue(stories["generic-repo"]["repo_healthcare_anchor_gate"]["affected"])
+
+        markdown = render_selection_audit_markdown(audit)
+
+        self.assertIn("Daily digest: 4 selected, 2 filtered after story-card selection", markdown)
+        self.assertIn("Short-digest effect: 2 filtered by daily limit", markdown)
+
+    def test_write_selection_audit_writes_json_and_markdown(self) -> None:
+        selected = story("selected", "Selected prior auth story")
+        brief = {
+            "summary": {"raw_item_count": 1},
+            "stories": [selected],
+            "story_cards": [selected],
+            "items": [item("item-selected", selected)],
+        }
+
+        with TemporaryDirectory() as tmpdir:
+            json_path = Path(tmpdir) / "audit.json"
+            markdown_path = Path(tmpdir) / "audit.md"
+
+            write_selection_audit(
+                brief,
+                path=str(json_path),
+                markdown_path=str(markdown_path),
+            )
+
+            self.assertTrue(json_path.exists())
+            self.assertTrue(markdown_path.exists())
+            self.assertIn("Selected prior auth story", markdown_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

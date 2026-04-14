@@ -8,4 +8,5 @@ latest_digest.html
 latest_operator_brief.json
 latest_operator_cockpit.html
 latest_selection_audit.json
+latest_selection_audit.md
 data/state/
