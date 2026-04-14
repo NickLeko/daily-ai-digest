@@ -171,6 +171,7 @@ Render the weekly-style operator review instead of the default daily email:
 - `latest_operator_brief.json`
 - `latest_operator_cockpit.html`
 - `latest_digest.html`
+- `latest_selection_audit.json` with story/item selection reasons for local debugging
 
 State is stored in `data/state/digest_state.json` so the app can:
 - skip a second send if the job runs again on the same local day
