@@ -166,6 +166,12 @@ Render the weekly-style operator review instead of the default daily email:
 ./.venv/bin/python main.py --dry-run --digest-mode weekly
 ```
 
+Generate a local weekly operator memo from saved digest memory and latest artifacts without fetching:
+
+```bash
+./.venv/bin/python main.py --weekly-memo
+```
+
 `--dry-run` still fetches and renders, but it does not send email and it does not update send/memory state. It writes:
 
 - `latest_operator_brief.json`
@@ -173,6 +179,7 @@ Render the weekly-style operator review instead of the default daily email:
 - `latest_digest.html`
 - `latest_selection_audit.json` with story/item selection reasons for local debugging
 - `latest_selection_audit.md` with a concise human-readable selection summary
+- `latest_weekly_operator_memo.md` when `--weekly-memo` is used
 
 State is stored in `data/state/digest_state.json` so the app can:
 - skip a second send if the job runs again on the same local day

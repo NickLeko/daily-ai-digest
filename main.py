@@ -30,6 +30,7 @@ from selection_audit import (
 )
 from state import already_sent_today, local_now, mark_sent
 from summarize import summarize_items
+from weekly_memo import DEFAULT_LOOKBACK_DAYS, WEEKLY_MEMO_FILE_PATH, write_weekly_memo
 
 
 def log(message: str) -> None:
@@ -62,6 +63,17 @@ def parse_args() -> argparse.Namespace:
         choices=["daily", "weekly"],
         default=DIGEST_MODE,
         help="Render the scan-first daily email or the analysis-heavy weekly digest.",
+    )
+    parser.add_argument(
+        "--weekly-memo",
+        action="store_true",
+        help="Generate a local weekly operator memo from saved digest artifacts and exit.",
+    )
+    parser.add_argument(
+        "--weekly-lookback-days",
+        type=int,
+        default=DEFAULT_LOOKBACK_DAYS,
+        help="Number of recent days to include when generating --weekly-memo.",
     )
     return parser.parse_args()
 
@@ -154,4 +166,8 @@ def run(*, dry_run: bool = False, digest_mode: str = DIGEST_MODE) -> None:
 
 if __name__ == "__main__":
     args = parse_args()
-    run(dry_run=args.dry_run, digest_mode=args.digest_mode)
+    if args.weekly_memo:
+        write_weekly_memo(lookback_days=args.weekly_lookback_days)
+        log(f"Weekly operator memo saved to {WEEKLY_MEMO_FILE_PATH}")
+    else:
+        run(dry_run=args.dry_run, digest_mode=args.digest_mode)
