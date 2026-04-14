@@ -11,6 +11,18 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check whitespace errors
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git diff --check "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+          elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            git diff --check "${{ github.event.before }}" "${{ github.sha }}"
+          else
+            git diff --check "$(git rev-list --max-parents=0 HEAD)" "${{ github.sha }}"
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v6
