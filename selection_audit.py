@@ -14,6 +14,7 @@ from operator_brief import (
     max_story_objective_score,
     story_has_target_fit,
     story_is_surface_worthy,
+    story_surface_worthiness_reason,
 )
 from state import local_now
 
@@ -73,15 +74,22 @@ def repo_healthcare_anchor_gate(entry: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def story_primary_reason(story: Dict[str, Any], *, selected: bool) -> str:
+def story_primary_reason(
+    story: Dict[str, Any],
+    *,
+    selected: bool,
+    daily_selected: bool = False,
+) -> str:
     if selected:
         return "Selected for operator story cards."
+    if daily_selected:
+        return "Selected as controlled daily backfill from broader stories."
     if not story_has_target_fit(story):
         return "Filtered because target-fit check failed."
     if story.get("reliability_label") == "Low" and int(story.get("supporting_item_count", 0) or 0) < 2:
         return "Filtered because reliability is low without corroborating support."
     if not story_is_surface_worthy(story):
-        return "Filtered because story score/objective thresholds were not strong enough."
+        return f"Filtered because {story_surface_worthiness_reason(story)}"
     return "Filtered by story-card cap or ordering after higher-ranked eligible stories filled the digest."
 
 
@@ -89,6 +97,7 @@ def daily_story_decisions(operator_brief: Dict[str, Any]) -> Dict[str, Dict[str,
     story_cards = operator_brief.get("story_cards")
     source_stories = story_cards if isinstance(story_cards, list) else operator_brief.get("stories", [])
     candidates = [story for story in (source_stories or []) if isinstance(story, dict)]
+    all_stories = [story for story in (operator_brief.get("stories", []) or []) if isinstance(story, dict)]
     selected_daily = select_daily_stories(operator_brief, story_limit=DAILY_STORY_LIMIT)
     selected_daily_ids = {story_id_for_render(story) for story in selected_daily}
 
@@ -128,7 +137,33 @@ def daily_story_decisions(operator_brief: Dict[str, Any]) -> Dict[str, Dict[str,
             "duplicate_suppression_affected": duplicate_affected,
             "shorter_digest_selection_affected": status == "filtered" and "daily" in reason,
             "backfill_affected": False,
+            "backfill_selected": False,
             "backfill_note": "Daily rendering reads story_cards when present; stories outside story_cards are not backfilled.",
+        }
+
+    for story in all_stories:
+        story_id = story_id_for_render(story)
+        if not story_id or story_id in decisions:
+            continue
+
+        selected = story_id in selected_daily_ids
+        decisions[story_id] = {
+            "status": "selected" if selected else "not_considered",
+            "selected": selected,
+            "reason": (
+                "Selected as controlled daily backfill from broader stories."
+                if selected
+                else "Not selected for daily backfill because the daily minimum was already met or the story failed the backfill quality gate."
+            ),
+            "duplicate_suppression_affected": False,
+            "shorter_digest_selection_affected": False,
+            "backfill_affected": not selected,
+            "backfill_selected": selected,
+            "backfill_note": (
+                "Daily rendering backfilled this story from broader stories."
+                if selected
+                else "Daily rendering considered broader stories only when story_cards were below the daily minimum."
+            ),
         }
 
     return decisions
@@ -144,7 +179,7 @@ def build_story_audit(operator_brief: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not isinstance(story, dict):
             continue
         story_id = str(story.get("story_id", "") or "")
-        selected = story_id in selected_story_ids
+        story_card_selected = story_id in selected_story_ids
         target_fit = story_has_target_fit(story)
         daily = daily_decisions.get(story_id, {
             "status": "not_considered",
@@ -153,8 +188,11 @@ def build_story_audit(operator_brief: Dict[str, Any]) -> List[Dict[str, Any]]:
             "duplicate_suppression_affected": False,
             "shorter_digest_selection_affected": True,
             "backfill_affected": True,
+            "backfill_selected": False,
             "backfill_note": "Daily rendering reads story_cards when present; this story was not backfilled.",
         })
+        daily_selected = bool(daily.get("selected"))
+        selected = story_card_selected or daily_selected
 
         rows.append(
             {
@@ -164,7 +202,12 @@ def build_story_audit(operator_brief: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "sources": [str(value) for value in story.get("source_names", []) or []],
                 "status": "selected" if selected else "filtered",
                 "selected": selected,
-                "primary_reason": story_primary_reason(story, selected=selected),
+                "story_card_selected": story_card_selected,
+                "primary_reason": story_primary_reason(
+                    story,
+                    selected=story_card_selected,
+                    daily_selected=daily_selected,
+                ),
                 "target_fit": {
                     "passes": target_fit,
                     "operator_relevance": str(story.get("operator_relevance", "") or ""),
@@ -173,6 +216,10 @@ def build_story_audit(operator_brief: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "matched_themes": [str(value) for value in story.get("matched_themes", []) or []],
                 },
                 "score_summary": score_summary(story),
+                "surface_worthiness": {
+                    "passes": story_is_surface_worthy(story),
+                    "reason": story_surface_worthiness_reason(story),
+                },
                 "repo_healthcare_anchor_gate": repo_healthcare_anchor_gate(story),
                 "duplicate_suppression": {
                     "affected": int(story.get("supporting_item_count", 0) or 0) > 1
@@ -250,7 +297,7 @@ def build_selection_audit(operator_brief: Dict[str, Any]) -> Dict[str, Any]:
         "summary": {
             "raw_item_count": ((operator_brief.get("summary") or {}).get("raw_item_count", 0)),
             "story_count": len(story_rows),
-            "story_card_count": len([row for row in story_rows if row["selected"]]),
+            "story_card_count": len([row for row in story_rows if row.get("story_card_selected")]),
             "daily_story_limit": DAILY_STORY_LIMIT,
             "daily_selected_story_count": len(
                 [
@@ -355,6 +402,11 @@ def render_selection_audit_markdown(audit: Dict[str, Any]) -> str:
         for row in stories
         if (row.get("shorter_digest_selection", {}) or {}).get("status") == "filtered"
     ]
+    daily_backfilled = [
+        row
+        for row in daily_selected
+        if (row.get("shorter_digest_selection", {}) or {}).get("backfill_selected")
+    ]
     target_fit_filtered = [
         row
         for row in filtered
@@ -390,12 +442,13 @@ def render_selection_audit_markdown(audit: Dict[str, Any]) -> str:
         "## Summary",
         f"- Stories: {len(selected)} surfaced, {len(filtered)} filtered.",
         (
-            f"- Daily digest: {len(daily_selected)} selected, {len(daily_filtered)} filtered "
-            f"after story-card selection, limit {audit.get('summary', {}).get('daily_story_limit', 0)}."
+            f"- Daily digest: {len(daily_selected)} selected "
+            f"({len(daily_backfilled)} backfilled), {len(daily_filtered)} filtered "
+            f"after daily selection, limit {audit.get('summary', {}).get('daily_story_limit', 0)}."
         ),
         (
             f"- Short-digest effect: {daily_limit_count} filtered by daily limit, "
-            f"{daily_duplicate_count} duplicate-suppressed, {len(backfill_filtered)} not backfilled from all stories."
+            f"{daily_duplicate_count} duplicate-suppressed, {len(backfill_filtered)} not backfilled from broader stories."
         ),
         f"- Target-fit failures among filtered stories: {len(target_fit_filtered)}.",
         "",

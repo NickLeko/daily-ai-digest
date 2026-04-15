@@ -18,6 +18,8 @@ def story(
     is_generic_devtool: bool = False,
     generic_repo_cap_exempt: bool = False,
     supporting_item_count: int = 1,
+    topic_key: str = "",
+    matched_themes: list[str] | None = None,
 ) -> dict[str, object]:
     return {
         "story_id": story_id,
@@ -49,9 +51,10 @@ def story(
         "operator_relevance": operator_relevance,
         "near_term_actionability": actionability,
         "workflow_wedges": workflow_wedges if workflow_wedges is not None else ["prior auth"],
-        "matched_themes": ["healthcare_admin_automation"],
+        "matched_themes": matched_themes if matched_themes is not None else ["healthcare_admin_automation"],
         "is_generic_devtool": is_generic_devtool,
         "generic_repo_cap_exempt": generic_repo_cap_exempt,
+        "topic_key": topic_key,
     }
 
 
@@ -158,8 +161,45 @@ class SelectionAuditTests(unittest.TestCase):
 
         markdown = render_selection_audit_markdown(audit)
 
-        self.assertIn("Daily digest: 4 selected, 2 filtered after story-card selection", markdown)
+        self.assertIn("Daily digest: 4 selected (0 backfilled), 2 filtered after daily selection", markdown)
         self.assertIn("Short-digest effect: 2 filtered by daily limit", markdown)
+
+    def test_selection_audit_explains_recall_surface_gate(self) -> None:
+        cards = [
+            story("alpha", "Prior auth operating update", category="News"),
+            story("bravo", "Ambient documentation rollout", category="News"),
+            story("charlie", "Referral intake automation", category="News"),
+        ]
+        low_relevance_recall = story(
+            "low-relevance-recall",
+            "openFDA tramadol enforcement recall",
+            category="Regulatory",
+            story_score=29.0,
+            operator_relevance="low",
+            actionability="high",
+            workflow_wedges=[],
+            topic_key="recall_enforcement",
+            matched_themes=[],
+        )
+        brief = {
+            "summary": {"raw_item_count": 4},
+            "stories": [*cards, low_relevance_recall],
+            "story_cards": cards,
+            "items": [],
+        }
+
+        audit = build_selection_audit(brief)
+        stories = {entry["story_id"]: entry for entry in audit["stories"]}
+        recall_row = stories["low-relevance-recall"]
+
+        self.assertEqual(recall_row["status"], "filtered")
+        self.assertFalse(recall_row["surface_worthiness"]["passes"])
+        self.assertIn("recall/enforcement", recall_row["surface_worthiness"]["reason"])
+        self.assertIn("primary-slot usefulness", recall_row["primary_reason"])
+
+        markdown = render_selection_audit_markdown(audit)
+
+        self.assertIn("recall/enforcement story lacks a stronger primary-slot usefulness signal", markdown)
 
     def test_write_selection_audit_writes_json_and_markdown(self) -> None:
         selected = story("selected", "Selected prior auth story")

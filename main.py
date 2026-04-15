@@ -132,7 +132,7 @@ def run(*, dry_run: bool = False, digest_mode: str = DIGEST_MODE) -> None:
     log(
         "Operator brief built: "
         f"{operator_brief['summary']['story_count']} stories from "
-        f"{operator_brief['summary']['raw_item_count']} raw items."
+        f"{operator_brief['summary']['raw_item_count']} screened items."
     )
 
     log(f"Formatting {digest_mode} HTML email...")

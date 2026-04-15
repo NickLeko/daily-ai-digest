@@ -23,7 +23,7 @@ from data import (
 )
 from formatter import format_digest_html, format_operator_brief_html, select_daily_stories
 from memory import build_memory_snapshot
-from operator_brief import select_story_cards
+from operator_brief import select_story_cards, story_is_surface_worthy
 from scoring import attach_priority_scores, build_top_picks
 from summarize import (
     fallback_digest_strategy,
@@ -43,6 +43,56 @@ def render_item(category: str, title: str) -> dict[str, str]:
         "summary": f"{title} summary.",
         "why_it_matters": f"{title} matters.",
         "signal": "high",
+    }
+
+
+def operator_story(
+    story_id: str,
+    title: str,
+    *,
+    category: str = "News",
+    story_score: float = 30.0,
+    operator_relevance: str = "medium",
+    actionability: str = "medium",
+    workflow_wedges: list[str] | None = None,
+    matched_themes: list[str] | None = None,
+    reliability_label: str = "Medium",
+    objective_scores: dict[str, float] | None = None,
+    is_generic_devtool: bool = False,
+    generic_repo_cap_exempt: bool = False,
+    topic_key: str = "",
+    supporting_item_count: int = 1,
+    watchlist_matches: list[dict[str, str]] | None = None,
+) -> dict[str, object]:
+    return {
+        "story_id": story_id,
+        "cluster_id": story_id,
+        "cluster_title": title,
+        "title": title,
+        "canonical_url": f"https://example.com/{story_id}",
+        "url": f"https://example.com/{story_id}",
+        "source_names": ["Example Source"],
+        "confidence": "High" if reliability_label == "High" else "Medium",
+        "reliability_score": 90 if reliability_label == "High" else 70,
+        "reliability_label": reliability_label,
+        "summary": "Operator summary.",
+        "why_it_matters": "Prior-auth managers should audit evidence exchange this week.",
+        "action_suggestion": "Audit one prior auth evidence handoff this week.",
+        "category": category,
+        "item_type": category.lower(),
+        "story_score": story_score,
+        "priority_score": story_score,
+        "objective_scores": objective_scores
+        or {"career": 5.8, "build": 5.6, "content": 5.7, "regulatory": 4.0},
+        "operator_relevance": operator_relevance,
+        "near_term_actionability": actionability,
+        "workflow_wedges": workflow_wedges if workflow_wedges is not None else ["prior auth"],
+        "matched_themes": matched_themes if matched_themes is not None else ["healthcare_admin_automation"],
+        "supporting_item_count": supporting_item_count,
+        "is_generic_devtool": is_generic_devtool,
+        "generic_repo_cap_exempt": generic_repo_cap_exempt,
+        "watchlist_matches": watchlist_matches or [],
+        "topic_key": topic_key,
     }
 
 
@@ -172,44 +222,100 @@ class FormatterTests(unittest.TestCase):
         self.assertNotIn("Extra summary noise.", html)
         self.assertNotIn("Extra why noise.", html)
 
-    def test_daily_operator_digest_does_not_backfill_beyond_story_cards(self) -> None:
-        selected_story = {
-            "story_id": "selected",
-            "cluster_title": "CMS prior auth evidence exchange",
-            "canonical_url": "https://example.com/selected",
-            "source_names": ["CMS Newsroom"],
-            "confidence": "High",
-            "summary": "Selected summary.",
-            "why_it_matters": "Prior-auth managers should audit evidence exchange this week.",
-            "action_suggestion": "Audit one prior auth evidence handoff this week.",
-            "category": "Regulatory",
-            "workflow_wedges": ["prior auth"],
-            "near_term_actionability": "high",
-        }
-        backfill_story = {
-            "story_id": "backfill",
-            "cluster_title": "Generic agent connector repo",
-            "canonical_url": "https://example.com/backfill",
-            "source_names": ["GitHub Search"],
-            "confidence": "High",
-            "summary": "Generic repo summary.",
-            "why_it_matters": "Generic why.",
-            "action_suggestion": "Review this later.",
-            "category": "Repo",
-        }
+    def test_daily_operator_digest_backfills_when_story_cards_are_below_minimum(self) -> None:
+        selected_story = operator_story(
+            "selected",
+            "CMS prior auth evidence exchange",
+            category="Regulatory",
+            story_score=42.0,
+            reliability_label="High",
+            actionability="high",
+            objective_scores={"career": 7.0, "build": 6.8, "content": 6.1, "regulatory": 7.4},
+        )
+        strong_backfill = operator_story(
+            "strong-backfill",
+            "Prior auth operating benchmark",
+            story_score=34.0,
+            operator_relevance="high",
+            actionability="high",
+        )
+        medium_backfill = operator_story(
+            "medium-backfill",
+            "CMS ACCESS participants signal payer workflow change",
+            story_score=27.0,
+            operator_relevance="medium",
+            actionability="medium",
+            workflow_wedges=[],
+            matched_themes=["content_opportunities"],
+        )
+        junk_story = operator_story(
+            "junk",
+            "Generic agent connector hype",
+            story_score=99.0,
+            operator_relevance="low",
+            actionability="low",
+            workflow_wedges=[],
+            matched_themes=["agents_workflows"],
+            is_generic_devtool=True,
+        )
         brief = {
-            "summary": {"raw_item_count": 2, "story_count": 2, "story_card_count": 1},
+            "summary": {"raw_item_count": 4, "story_count": 4, "story_card_count": 1},
             "story_cards": [selected_story],
-            "stories": [selected_story, backfill_story],
+            "stories": [selected_story, junk_story, strong_backfill, medium_backfill],
         }
 
         selected = select_daily_stories(brief, story_limit=4)
         html = format_operator_brief_html(brief, story_limit=4)
 
-        self.assertEqual([story["story_id"] for story in selected], ["selected"])
-        self.assertIn("1 story from 2 items", html)
+        self.assertEqual(
+            [story["story_id"] for story in selected],
+            ["selected", "strong-backfill", "medium-backfill"],
+        )
+        self.assertIn("3 stories from 4 screened items", html)
         self.assertIn("CMS prior auth evidence exchange", html)
-        self.assertNotIn("Generic agent connector repo", html)
+        self.assertIn("Prior auth operating benchmark", html)
+        self.assertIn("CMS ACCESS participants signal payer workflow change", html)
+        self.assertNotIn("Generic agent connector hype", html)
+        self.assertNotIn("from 4 items", html)
+
+    def test_daily_operator_digest_does_not_backfill_when_story_cards_meet_minimum(self) -> None:
+        cards = [
+            operator_story("first", "First story", story_score=40.0),
+            operator_story("second", "Second story", story_score=38.0),
+            operator_story("third", "Third story", story_score=36.0),
+        ]
+        extra_story = operator_story("extra", "Extra eligible story", story_score=50.0)
+        brief = {
+            "summary": {"raw_item_count": 4, "story_count": 4, "story_card_count": 3},
+            "story_cards": cards,
+            "stories": [*cards, extra_story],
+        }
+
+        selected = select_daily_stories(brief, story_limit=4)
+        html = format_operator_brief_html(brief, story_limit=4)
+
+        self.assertEqual([story["story_id"] for story in selected], ["first", "second", "third"])
+        self.assertIn("3 stories from 4 screened items", html)
+        self.assertNotIn("Extra eligible story", html)
+
+    def test_single_story_daily_operator_digest_does_not_repeat_the_headline(self) -> None:
+        single_story = operator_story(
+            "single",
+            "Single CMS access story",
+            category="News",
+            story_score=35.0,
+        )
+        brief = {
+            "summary": {"raw_item_count": 1, "story_count": 1, "story_card_count": 1},
+            "story_cards": [single_story],
+            "stories": [],
+        }
+
+        html = format_operator_brief_html(brief, story_limit=4)
+
+        self.assertNotIn("HEADLINES", html)
+        self.assertEqual(html.count("Single CMS access story"), 1)
+        self.assertIn("1 story from 1 screened item", html)
 
     def test_daily_operator_digest_suppresses_near_duplicate_headlines(self) -> None:
         brief = {
@@ -963,6 +1069,79 @@ class PersonalizationScoringTests(unittest.TestCase):
         selected = select_story_cards([weak_repo, workflow_repo])
 
         self.assertEqual([story["story_id"] for story in selected], ["workflow-repo"])
+
+    def test_story_cards_filter_low_relevance_recall_enforcement(self) -> None:
+        low_relevance_recall = operator_story(
+            "low-relevance-recall",
+            "openFDA tramadol enforcement recall",
+            category="Regulatory",
+            story_score=29.0,
+            reliability_label="High",
+            operator_relevance="low",
+            actionability="high",
+            workflow_wedges=[],
+            matched_themes=[],
+            topic_key="recall_enforcement",
+            objective_scores={"career": 5.5, "build": 3.7, "content": 4.1, "regulatory": 6.2},
+        )
+        cms_policy_story = operator_story(
+            "cms-policy",
+            "CMS prior auth workflow rule",
+            category="Regulatory",
+            story_score=26.0,
+            reliability_label="High",
+            operator_relevance="high",
+            actionability="high",
+            workflow_wedges=["prior auth"],
+            matched_themes=["healthcare_admin_automation"],
+            topic_key="prior_authorization",
+            objective_scores={"career": 7.0, "build": 6.8, "content": 5.8, "regulatory": 7.1},
+        )
+
+        selected = select_story_cards([low_relevance_recall, cms_policy_story])
+
+        self.assertFalse(story_is_surface_worthy(low_relevance_recall))
+        self.assertTrue(story_is_surface_worthy(cms_policy_story))
+        self.assertEqual([story["story_id"] for story in selected], ["cms-policy"])
+
+    def test_story_cards_allow_recall_enforcement_with_stronger_usefulness_signal(self) -> None:
+        workflow_recall = operator_story(
+            "workflow-recall",
+            "FDA device recall affects prior auth documentation workflow",
+            category="Regulatory",
+            story_score=29.0,
+            reliability_label="High",
+            operator_relevance="medium",
+            actionability="high",
+            workflow_wedges=[],
+            matched_themes=[],
+            topic_key="recall_enforcement",
+            objective_scores={"career": 5.8, "build": 4.8, "content": 4.4, "regulatory": 6.3},
+        )
+
+        selected = select_story_cards([workflow_recall])
+
+        self.assertTrue(story_is_surface_worthy(workflow_recall))
+        self.assertEqual([story["story_id"] for story in selected], ["workflow-recall"])
+
+    def test_story_cards_keep_broad_news_surface_threshold_unchanged(self) -> None:
+        cms_access_news = operator_story(
+            "cms-access-news",
+            "CMS announces 150 participants for upcoming ACCESS model launch",
+            category="News",
+            story_score=27.37,
+            operator_relevance="medium",
+            actionability="medium",
+            workflow_wedges=[],
+            matched_themes=["content_opportunities"],
+            reliability_label="Medium",
+            objective_scores={"career": 5.24, "build": 3.38, "content": 5.27, "regulatory": 4.53},
+        )
+
+        selected = select_story_cards([cms_access_news])
+
+        self.assertFalse(story_is_surface_worthy(cms_access_news))
+        self.assertEqual(selected, [])
 
 
 class DigestStrategyTests(unittest.TestCase):

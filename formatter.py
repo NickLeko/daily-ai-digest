@@ -45,6 +45,16 @@ CHANGE_STYLES = {
 
 SECTION_ORDER = ["Repo", "News", "Regulatory"]
 DAILY_STORY_LIMIT = 4
+DAILY_MIN_STORY_COUNT = 3
+DAILY_BACKFILL_MIN_STORY_SCORE = 24.0
+DAILY_BACKFILL_MIN_OBJECTIVE_SCORE = 5.8
+
+DAILY_TARGET_THEME_KEYS = {
+    "healthcare_ai_pm",
+    "healthcare_admin_automation",
+    "low_reg_friction_wedges",
+    "llm_eval_rag_governance_safety",
+}
 
 ACTION_WORDS = {
     "audit",
@@ -570,6 +580,147 @@ def should_render_daily_action(story: Dict[str, object], action: str) -> bool:
     return has_this_week_relevance and has_story_context
 
 
+def story_float(story: Dict[str, object], key: str, default: float = 0.0) -> float:
+    try:
+        return float(story.get(key, default) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def story_int(story: Dict[str, object], key: str, default: int = 0) -> int:
+    try:
+        return int(story.get(key, default) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def story_objective_score(story: Dict[str, object], objective: str) -> float:
+    raw_scores = story.get("objective_scores", {}) or {}
+    if not isinstance(raw_scores, dict):
+        return 0.0
+    try:
+        return float(raw_scores.get(objective, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def max_story_objective_score_for_render(story: Dict[str, object]) -> float:
+    raw_scores = story.get("objective_scores", {}) or {}
+    if not isinstance(raw_scores, dict):
+        return 0.0
+    values = []
+    for value in raw_scores.values():
+        try:
+            values.append(float(value or 0.0))
+        except (TypeError, ValueError):
+            continue
+    return max(values, default=0.0)
+
+
+def story_list_values(story: Dict[str, object], key: str) -> List[str]:
+    raw_values = story.get(key) or []
+    if not isinstance(raw_values, list):
+        raw_values = [raw_values]
+    return [compact_text(value) for value in raw_values if compact_text(value)]
+
+
+def daily_backfill_has_target_fit(story: Dict[str, object]) -> bool:
+    category = compact_text(story.get("category"))
+    operator_relevance = compact_text(story.get("operator_relevance") or "low").lower()
+    actionability = compact_text(story.get("near_term_actionability") or "low").lower()
+    workflow_wedges = story_list_values(story, "workflow_wedges")
+    matched_themes = set(story_list_values(story, "matched_themes"))
+    max_objective = max_story_objective_score_for_render(story)
+    has_watchlist_match = bool(story.get("watchlist_matches"))
+
+    if bool(story.get("docs_only_repo")):
+        return False
+
+    if category == "Regulatory":
+        regulatory_score = story_objective_score(story, "regulatory")
+        return (
+            regulatory_score >= 6.1
+            or bool(workflow_wedges)
+            or operator_relevance in {"high", "medium"}
+        )
+
+    if category == "Repo":
+        is_generic = bool(story.get("is_generic_devtool"))
+        is_exempt = bool(story.get("generic_repo_cap_exempt"))
+        if is_generic and not is_exempt:
+            return has_watchlist_match or (
+                "llm_eval_rag_governance_safety" in matched_themes
+                and max_objective >= 7.2
+                and actionability != "low"
+            )
+        return (
+            has_watchlist_match
+            or bool(workflow_wedges)
+            or operator_relevance == "high"
+            or (
+                "llm_eval_rag_governance_safety" in matched_themes
+                and max_objective >= DAILY_BACKFILL_MIN_OBJECTIVE_SCORE
+                and actionability != "low"
+            )
+        )
+
+    if category == "News":
+        return (
+            operator_relevance in {"high", "medium"}
+            and (
+                bool(workflow_wedges)
+                or actionability in {"high", "medium"}
+                or bool(matched_themes & DAILY_TARGET_THEME_KEYS)
+            )
+        )
+
+    return False
+
+
+def daily_backfill_story_is_worthy(story: Dict[str, object]) -> bool:
+    if not daily_backfill_has_target_fit(story):
+        return False
+    if compact_text(story.get("reliability_label")).lower() == "low" and story_int(story, "supporting_item_count") < 2:
+        return False
+
+    story_score = story_float(story, "story_score", story_float(story, "priority_score"))
+    max_objective = max_story_objective_score_for_render(story)
+    actionability = compact_text(story.get("near_term_actionability") or "low").lower()
+    support_count = story_int(story, "supporting_item_count")
+
+    return (
+        story_score >= DAILY_BACKFILL_MIN_STORY_SCORE
+        or max_objective >= DAILY_BACKFILL_MIN_OBJECTIVE_SCORE
+        or (support_count >= 2 and actionability in {"high", "medium"})
+    )
+
+
+def daily_backfill_rank(story: Dict[str, object]) -> tuple[float, float, int, int, str]:
+    return (
+        story_float(story, "story_score", story_float(story, "priority_score")),
+        max_story_objective_score_for_render(story),
+        story_int(story, "reliability_score"),
+        story_int(story, "supporting_item_count"),
+        story_title_for_render(story),
+    )
+
+
+def append_daily_story(
+    story: Dict[str, object],
+    selected: List[Dict[str, object]],
+    seen: set[str],
+) -> bool:
+    story_id = story_id_for_render(story)
+    if story_id and story_id in seen:
+        return False
+    if stories_are_render_duplicates(story, selected):
+        return False
+    if story_id:
+        seen.add(story_id)
+    selected.append(story)
+    return True
+
+
 def select_daily_stories(
     operator_brief: Dict[str, object],
     *,
@@ -577,26 +728,39 @@ def select_daily_stories(
 ) -> List[Dict[str, object]]:
     story_limit = max(1, story_limit)
     story_cards = operator_brief.get("story_cards")
-    source_stories = story_cards if isinstance(story_cards, list) else operator_brief.get("stories", [])
+    all_stories = [
+        story
+        for story in (operator_brief.get("stories", []) or [])
+        if isinstance(story, dict)
+    ]
+    primary_candidates = story_cards if isinstance(story_cards, list) else all_stories
     candidates = [
         story
-        for story in (source_stories or [])
+        for story in (primary_candidates or [])
         if isinstance(story, dict)
     ]
 
     selected: List[Dict[str, object]] = []
     seen: set[str] = set()
     for story in candidates:
-        story_id = story_id_for_render(story)
-        if story_id and story_id in seen:
-            continue
-        if stories_are_render_duplicates(story, selected):
-            continue
-        if story_id:
-            seen.add(story_id)
-        selected.append(story)
+        append_daily_story(story, selected, seen)
         if len(selected) >= story_limit:
             break
+
+    # Daily emails should not collapse to a single card when the broader story board
+    # still has credible near-misses. Story cards remain the primary path; this
+    # fallback only fills a thin daily render with conservative, target-fit stories.
+    backfill_target = min(story_limit, DAILY_MIN_STORY_COUNT)
+    if isinstance(story_cards, list) and len(selected) < backfill_target:
+        backfill_candidates = [
+            story
+            for story in all_stories
+            if daily_backfill_story_is_worthy(story)
+        ]
+        for story in sorted(backfill_candidates, key=daily_backfill_rank, reverse=True):
+            append_daily_story(story, selected, seen)
+            if len(selected) >= backfill_target:
+                break
 
     return selected
 
@@ -606,9 +770,11 @@ def build_daily_story_header(
     stories: List[Dict[str, object]],
 ) -> str:
     summary = operator_brief.get("summary", {}) or {}
-    raw_count = int(summary.get("raw_item_count", 0) or 0)
-    if raw_count <= 0:
-        raw_count = len(stories)
+    # Legacy artifacts call this raw_item_count, but the value is the number of
+    # post-fetch, screened items that entered the operator brief.
+    screened_count = int(summary.get("raw_item_count", 0) or 0)
+    if screened_count <= 0:
+        screened_count = len(stories)
 
     counts = {category: 0 for category in SECTION_ORDER}
     for story in stories:
@@ -624,7 +790,7 @@ def build_daily_story_header(
     category_tail = f": {', '.join(category_parts)}" if category_parts else ""
     return (
         f"{singular_plural(len(stories), 'story', 'stories')} from "
-        f"{singular_plural(raw_count, 'item')}{category_tail}."
+        f"{singular_plural(screened_count, 'screened item')}{category_tail}."
     )
 
 
@@ -633,6 +799,8 @@ def render_daily_headlines(stories: List[Dict[str, object]]) -> str:
         return """
         <p style="margin: 8px 0 14px 0; color:#555;">No surfaced stories today.</p>
         """
+    if len(stories) == 1:
+        return ""
 
     rows = []
     for story in stories:
@@ -783,7 +951,7 @@ def format_weekly_operator_brief_html(operator_brief: Dict[str, object]) -> str:
         <h2 style="margin-bottom: 8px;">Weekly AI Digest - Operator Review</h2>
         <p style="margin-top: 0;"><strong>Date:</strong> {date_str}</p>
         <p style="margin: 0 0 16px 0;">
-          {escaped(str(summary.get('raw_item_count', 0)))} raw signals normalized into
+          {escaped(str(summary.get('raw_item_count', 0)))} screened items organized into
           {escaped(str(summary.get('story_count', 0)))} story clusters, with
           {escaped(str(summary.get('story_card_count', 0)))} surfaced in the email.
         </p>

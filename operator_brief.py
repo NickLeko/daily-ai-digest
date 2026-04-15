@@ -129,6 +129,7 @@ STORY_TARGET_THEME_KEYS = {
     "low_reg_friction_wedges",
     "llm_eval_rag_governance_safety",
 }
+RECALL_ENFORCEMENT_TOPIC_KEY = "recall_enforcement"
 
 
 def load_json_config(path: str, default: Dict[str, Any]) -> Dict[str, Any]:
@@ -1376,6 +1377,28 @@ def max_story_objective_score(story: Dict[str, Any]) -> float:
     return float(max((story.get("objective_scores", {}) or {}).values(), default=0.0) or 0.0)
 
 
+def story_is_recall_enforcement(story: Dict[str, Any]) -> bool:
+    return (
+        str(story.get("category", "") or "") == "Regulatory"
+        and str(story.get("topic_key", "") or "").strip().lower() == RECALL_ENFORCEMENT_TOPIC_KEY
+    )
+
+
+def recall_enforcement_has_primary_slot_signal(story: Dict[str, Any]) -> bool:
+    operator_relevance = str(story.get("operator_relevance", "low") or "low")
+    workflow_wedges = [str(value) for value in story.get("workflow_wedges", []) or []]
+    matched_themes = {str(value) for value in story.get("matched_themes", []) or []}
+    support_count = int(story.get("supporting_item_count", 0) or 0)
+
+    return (
+        operator_relevance in {"high", "medium"}
+        or bool(workflow_wedges)
+        or support_count >= 2
+        or bool(story.get("watchlist_matches"))
+        or bool(matched_themes & STORY_TARGET_THEME_KEYS)
+    )
+
+
 def story_has_target_fit(story: Dict[str, Any]) -> bool:
     category = str(story.get("category", "") or "")
     operator_relevance = str(story.get("operator_relevance", "low") or "low")
@@ -1426,11 +1449,11 @@ def story_has_target_fit(story: Dict[str, Any]) -> bool:
     return False
 
 
-def story_is_surface_worthy(story: Dict[str, Any]) -> bool:
+def story_surface_worthiness(story: Dict[str, Any]) -> Tuple[bool, str]:
     if not story_has_target_fit(story):
-        return False
+        return False, "target-fit check failed."
     if story.get("reliability_label") == "Low" and int(story.get("supporting_item_count", 0) or 0) < 2:
-        return False
+        return False, "reliability is low without corroborating support."
 
     story_score = float(story.get("story_score", 0.0) or 0.0)
     max_objective = max_story_objective_score(story)
@@ -1438,20 +1461,33 @@ def story_is_surface_worthy(story: Dict[str, Any]) -> bool:
     support_count = int(story.get("supporting_item_count", 0) or 0)
 
     if story.get("category") == "Regulatory":
+        if story_is_recall_enforcement(story) and not recall_enforcement_has_primary_slot_signal(story):
+            return False, "recall/enforcement story lacks a stronger primary-slot usefulness signal."
+
         regulatory_score = float((story.get("objective_scores", {}) or {}).get("regulatory", 0.0) or 0.0)
-        return (
-            story_score >= 18.0
-            or regulatory_score >= OBJECTIVE_MIN_SCORES["regulatory"]
-            or support_count >= 2
-        )
+        if story_score >= 18.0:
+            return True, "regulatory story score threshold passed."
+        if regulatory_score >= OBJECTIVE_MIN_SCORES["regulatory"]:
+            return True, "regulatory objective threshold passed."
+        if support_count >= 2:
+            return True, "regulatory story has corroborating support."
+        return False, "regulatory story score/objective/support thresholds were not strong enough."
 
     if story_score >= STORY_STRONG_SCORE:
-        return True
+        return True, "story score threshold passed."
     if max_objective >= STORY_STRONG_OBJECTIVE_SCORE and actionability != "low":
-        return True
+        return True, "strong objective threshold passed."
     if support_count >= 2 and actionability in {"high", "medium"}:
-        return True
-    return False
+        return True, "story has corroborating support and actionability."
+    return False, "story score/objective thresholds were not strong enough."
+
+
+def story_surface_worthiness_reason(story: Dict[str, Any]) -> str:
+    return story_surface_worthiness(story)[1]
+
+
+def story_is_surface_worthy(story: Dict[str, Any]) -> bool:
+    return story_surface_worthiness(story)[0]
 
 
 def repeated_sentence_shells(lines: List[str]) -> int:
