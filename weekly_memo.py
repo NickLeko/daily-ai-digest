@@ -16,6 +16,85 @@ from state import local_now
 
 WEEKLY_MEMO_FILE_PATH = "latest_weekly_operator_memo.md"
 DEFAULT_LOOKBACK_DAYS = 7
+MIN_MEDIUM_CONFIDENCE_BRIEFS = 2
+MIN_MEDIUM_CONFIDENCE_SIGNALS = 3
+MIN_HIGH_CONFIDENCE_BRIEFS = 4
+MIN_HIGH_CONFIDENCE_SIGNALS = 8
+
+CORE_WEDGE_TERMS = {
+    "admin",
+    "ambient",
+    "appeal",
+    "audit",
+    "authorization",
+    "claim",
+    "claims",
+    "clinical",
+    "denial",
+    "denials",
+    "documentation",
+    "ehr",
+    "evidence",
+    "fhir",
+    "governance",
+    "handoff",
+    "healthcare",
+    "interoperability",
+    "intake",
+    "payer",
+    "prior auth",
+    "prior authorization",
+    "provider",
+    "rcm",
+    "referral",
+    "revenue cycle",
+    "tefca",
+    "workflow",
+}
+
+STRONG_OPERATOR_WEDGE_TERMS = {
+    "ambient",
+    "appeal",
+    "authorization",
+    "claim",
+    "claims",
+    "denial",
+    "denials",
+    "documentation",
+    "ehr",
+    "evidence handoff",
+    "fhir",
+    "handoff",
+    "interoperability",
+    "intake",
+    "payer",
+    "prior auth",
+    "prior authorization",
+    "provider workflow",
+    "rcm",
+    "referral",
+    "revenue cycle",
+    "tefca",
+}
+
+LOW_FIT_REGULATORY_NOISE_TERMS = {
+    "bottle",
+    "capsule",
+    "capsules",
+    "drug recall",
+    "hydrochloride",
+    "manufactured by",
+    "pharmaceutical",
+    "recall",
+    "tablet",
+    "tablets",
+    "usp",
+}
+
+GENERIC_THEME_LABELS = {
+    "Buyer Adoption / Cio / Enterprise Demand",
+    "Infrastructure / Developer Tooling",
+}
 
 
 def load_json_file(path: str) -> Dict[str, Any]:
@@ -85,6 +164,42 @@ def story_score(story: Dict[str, Any]) -> float:
     return float(story.get("story_score", story.get("priority_score", 0.0)) or 0.0)
 
 
+def story_text_blob(story: Dict[str, Any]) -> str:
+    values: List[str] = [
+        story_title(story),
+        str(story.get("category", "") or ""),
+        str(story.get("item_type", "") or ""),
+        *[str(value) for value in story.get("workflow_wedges", []) or []],
+        *[str(value) for value in story.get("matched_themes", []) or []],
+        *[str(value) for value in story.get("market_bucket_ids", []) or []],
+        *[str(value) for value in story.get("market_buckets", []) or []],
+        *[str(value) for value in story.get("signature_tokens", []) or []],
+        *story_thesis_labels(story),
+    ]
+    return " ".join(values).lower()
+
+
+def story_matches_core_wedge(story: Dict[str, Any]) -> bool:
+    text = story_text_blob(story)
+    has_strong_operator_wedge = any(term in text for term in STRONG_OPERATOR_WEDGE_TERMS)
+    if any(term in text for term in LOW_FIT_REGULATORY_NOISE_TERMS) and not has_strong_operator_wedge:
+        return False
+    return any(term in text for term in CORE_WEDGE_TERMS)
+
+
+def eligible_signal_stories(stories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        story
+        for story in stories
+        if story_matches_core_wedge(story)
+        and (
+            story_score(story) >= 24.0
+            or str(story.get("change_status", "") or "") in {"escalating", "repeated_stronger"}
+            or story.get("reliability_label") == "High"
+        )
+    ]
+
+
 def story_bucket_labels(story: Dict[str, Any]) -> List[str]:
     labels = [labelize(value) for value in story.get("market_buckets", []) or [] if labelize(value)]
     if labels:
@@ -106,6 +221,36 @@ def story_thesis_labels(story: Dict[str, Any]) -> List[str]:
         if label and relation != "adjacent":
             labels.append(label)
     return labels
+
+
+def confidence_profile(brief_count: int, eligible_signal_count: int) -> Dict[str, str]:
+    if (
+        brief_count >= MIN_HIGH_CONFIDENCE_BRIEFS
+        and eligible_signal_count >= MIN_HIGH_CONFIDENCE_SIGNALS
+    ):
+        return {
+            "level": "High",
+            "summary": "enough saved history to treat recurring patterns as weekly signals",
+        }
+    if (
+        brief_count >= MIN_MEDIUM_CONFIDENCE_BRIEFS
+        and eligible_signal_count >= MIN_MEDIUM_CONFIDENCE_SIGNALS
+    ):
+        return {
+            "level": "Medium",
+            "summary": "enough data for directional synthesis, not enough for strong trend claims",
+        }
+    return {
+        "level": "Low",
+        "summary": "not enough saved briefs or eligible wedge signals for a confident weekly read",
+    }
+
+
+def confidence_line(profile: Dict[str, str], *, brief_count: int, eligible_signal_count: int) -> str:
+    return (
+        f"- Confidence: {profile['level']} - {profile['summary']} "
+        f"({brief_count} saved brief(s), {eligible_signal_count} eligible wedge signal(s))."
+    )
 
 
 def normalize_latest_brief(brief: Dict[str, Any]) -> Dict[str, Any]:
@@ -208,6 +353,7 @@ def build_recurring_themes(stories: List[Dict[str, Any]]) -> List[str]:
 
 
 def build_signals_that_matter(stories: List[Dict[str, Any]]) -> List[str]:
+    stories = eligible_signal_stories(stories)
     grouped: Dict[str, Dict[str, Any]] = defaultdict(
         lambda: {
             "count": 0,
@@ -244,7 +390,7 @@ def build_signals_that_matter(stories: List[Dict[str, Any]]) -> List[str]:
             f"- {entry['title']}: seen {entry['count']}x ({dates}); "
             f"max score {entry['max_score']:.2f}{reliability}{status}."
         )
-    return lines or ["- No surfaced story signals available yet."]
+    return lines or ["- No eligible operator-wedge signals surfaced yet."]
 
 
 def latest_full_brief(briefs: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -258,38 +404,76 @@ def pick_item_title(pick: Dict[str, Any]) -> str:
     return story_title(item)
 
 
-def build_opportunities(brief: Dict[str, Any]) -> List[str]:
+def strongest_wedge_label(stories: List[Dict[str, Any]]) -> str:
+    counts: Counter[str] = Counter()
+    for story in stories:
+        labels = [
+            label
+            for label in story_bucket_labels(story)
+            if label and label not in GENERIC_THEME_LABELS
+        ]
+        if not labels:
+            labels = [
+                labelize(value)
+                for value in story.get("workflow_wedges", []) or []
+                if labelize(value)
+            ]
+        counts.update(labels)
+    if counts:
+        return counts.most_common(1)[0][0]
+    return "the strongest operator wedge"
+
+
+def build_opportunities(
+    *,
+    strongest_wedge: str,
+    confidence: Dict[str, str],
+    eligible_stories: List[Dict[str, Any]],
+) -> List[str]:
     lines = []
-    operator_moves = brief.get("operator_moves", {}) if isinstance(brief.get("operator_moves", {}), dict) else {}
-    build_idea = sentence(operator_moves.get("build_idea", ""))
-    if build_idea:
-        append_unique(lines, f"- {build_idea}.")
-
-    top_picks = brief.get("top_picks", {}) if isinstance(brief.get("top_picks", {}), dict) else {}
-    build_pick = pick_item_title(top_picks.get("build", {}))
-    if build_pick:
-        append_unique(lines, f"- Pressure-test the build pick: {build_pick}.")
-
-    for story in sorted(brief.get("stories", []) or [], key=story_score, reverse=True):
-        action = sentence(story.get("action_suggestion", ""))
-        if action:
-            append_unique(lines, f"- {action}.")
-        if len(lines) >= 4:
-            break
+    wedge = strongest_wedge.lower()
+    if confidence.get("level") == "Low":
+        append_unique(
+            lines,
+            f"- Hold roadmap commitments on {wedge}; collect another week of primary or implementation evidence first.",
+        )
+    append_unique(
+        lines,
+        f"- Map one {wedge} workflow from trigger to evidence, status, owner, and audit trail.",
+    )
+    append_unique(
+        lines,
+        f"- Look for a narrow tool that reduces handoff ambiguity in {wedge}, not a broad agent demo.",
+    )
+    if len(eligible_stories) >= 2:
+        append_unique(
+            lines,
+            f"- Compare the strongest {wedge} signals side by side and isolate the repeated operational bottleneck.",
+        )
     return lines or ["- No concrete build opportunity stood out from the saved briefs."]
 
 
-def build_content_angles(brief: Dict[str, Any], recurring_lines: List[str]) -> List[str]:
+def build_content_angles(
+    *,
+    strongest_wedge: str,
+    recurring_lines: List[str],
+    confidence: Dict[str, str],
+) -> List[str]:
     lines = []
-    operator_moves = brief.get("operator_moves", {}) if isinstance(brief.get("operator_moves", {}), dict) else {}
-    content_angle = sentence(operator_moves.get("content_angle", ""))
-    if content_angle:
-        append_unique(lines, f"- {content_angle}.")
-
-    top_picks = brief.get("top_picks", {}) if isinstance(brief.get("top_picks", {}), dict) else {}
-    content_pick = pick_item_title(top_picks.get("content", {}))
-    if content_pick:
-        append_unique(lines, f"- Use the content pick as a concrete example: {content_pick}.")
+    wedge = strongest_wedge.lower()
+    if confidence.get("level") == "Low":
+        append_unique(
+            lines,
+            f"- Frame {wedge} as a watchlist, not a market conclusion.",
+        )
+    append_unique(
+        lines,
+        f"- Explain what would make {wedge} operationally real: evidence quality, integration burden, and ownership.",
+    )
+    append_unique(
+        lines,
+        f"- Contrast concrete {wedge} workflow proof against generic AI tooling noise.",
+    )
 
     for line in recurring_lines[:2]:
         label = recurring_topic_label(line)
@@ -312,13 +496,24 @@ def audit_filtered_stories(audit: Dict[str, Any]) -> List[Dict[str, Any]]:
     )
 
 
-def build_noise(audit: Dict[str, Any], briefs: List[Dict[str, Any]]) -> List[str]:
+def build_noise(
+    audit: Dict[str, Any],
+    briefs: List[Dict[str, Any]],
+    *,
+    ineligible_stories: List[Dict[str, Any]] | None = None,
+) -> List[str]:
     lines = []
     for row in audit_filtered_stories(audit)[:4]:
         title = sentence(row.get("title", "Untitled"))
         reason = compact_reason(row.get("primary_reason", "filtered"))
         score = float(((row.get("score_summary", {}) or {}).get("story_score", 0.0)) or 0.0)
         append_unique(lines, f"- {title}: filtered at score {score:.2f}; {reason}.")
+
+    for story in sorted(ineligible_stories or [], key=story_score, reverse=True)[:3]:
+        append_unique(
+            lines,
+            f"- {story_title(story)}: high score {story_score(story):.2f}, but outside the core operator wedges.",
+        )
 
     for brief in reversed(briefs):
         quality = brief.get("quality_eval", {}) if isinstance(brief.get("quality_eval", {}), dict) else {}
@@ -374,12 +569,20 @@ def build_weekly_memo_markdown(
 ) -> str:
     briefs = recent_briefs(memory, latest_brief=latest_brief, lookback_days=lookback_days)
     stories = all_stories(briefs)
+    eligible_stories = eligible_signal_stories(stories)
+    ineligible_stories = [
+        story
+        for story in stories
+        if story not in eligible_stories and story_score(story) >= 24.0
+    ]
     latest = latest_full_brief(briefs)
-    recurring = build_recurring_themes(stories)
+    recurring = build_recurring_themes(eligible_stories)
+    strongest_wedge = strongest_wedge_label(eligible_stories)
+    confidence = confidence_profile(len(briefs), len(eligible_stories))
     generated_at = local_now().strftime("%Y-%m-%d %H:%M:%S %Z")
     top_insight = sentence(latest.get("top_insight", ""))
-    signal_lines = build_signals_that_matter(stories)
-    material_signal_count = len(signal_lines) if stories else 0
+    signal_lines = build_signals_that_matter(eligible_stories)
+    material_signal_count = len(signal_lines) if eligible_stories else 0
 
     lines = [
         "# Weekly Operator Memo",
@@ -392,6 +595,13 @@ def build_weekly_memo_markdown(
     if top_insight:
         lines.append(f"- Latest operator insight: {top_insight}.")
     lines.append(
+        confidence_line(
+            confidence,
+            brief_count=len(briefs),
+            eligible_signal_count=len(eligible_stories),
+        )
+    )
+    lines.append(
         f"- Main read: {material_signal_count} material signal thread(s), "
         f"{len(audit_filtered_stories(selection_audit or {}))} filtered near-miss(es) in the latest audit."
     )
@@ -399,9 +609,30 @@ def build_weekly_memo_markdown(
     sections = [
         ("Recurring Themes", recurring),
         ("Signals That Matter", signal_lines),
-        ("Product / Build Opportunities", build_opportunities(latest)),
-        ("Content Angles", build_content_angles(latest, recurring)),
-        ("Likely Noise / Overhyped Items", build_noise(selection_audit or {}, briefs)),
+        (
+            "Product / Build Opportunities",
+            build_opportunities(
+                strongest_wedge=strongest_wedge,
+                confidence=confidence,
+                eligible_stories=eligible_stories,
+            ),
+        ),
+        (
+            "Content Angles",
+            build_content_angles(
+                strongest_wedge=strongest_wedge,
+                recurring_lines=recurring,
+                confidence=confidence,
+            ),
+        ),
+        (
+            "Likely Noise / Overhyped Items",
+            build_noise(
+                selection_audit or {},
+                briefs,
+                ineligible_stories=ineligible_stories,
+            ),
+        ),
         ("Watch Next Week", build_watch_next_week(briefs, recurring)),
     ]
     for title, bullets in sections:

@@ -70,6 +70,25 @@ def latest_story(
     }
 
 
+def recall_story() -> dict[str, object]:
+    return {
+        "story_id": "story::fda-infusion-pump-recall",
+        "cluster_title": "FDA Class I infusion pump recall",
+        "category": "Regulatory",
+        "item_type": "regulatory",
+        "source_names": ["FDA"],
+        "market_buckets": ["Eval / governance / safety", "Regulation / policy / standards"],
+        "market_bucket_ids": ["eval_governance", "regulation_policy"],
+        "reliability_label": "High",
+        "story_score": 52.0,
+        "priority_score": 52.0,
+        "change_status": "new",
+        "signature_tokens": ["fda", "class", "infusion", "pump", "recall"],
+        "action_suggestion": "Review recall details.",
+        "thesis_links": [],
+    }
+
+
 class WeeklyMemoTests(unittest.TestCase):
     def test_weekly_memo_renders_operator_sections_from_saved_artifacts(self) -> None:
         memory = {
@@ -148,9 +167,40 @@ class WeeklyMemoTests(unittest.TestCase):
             self.assertIn(section, memo)
 
         self.assertIn("Prior auth remains the clearest operator wedge", memo)
-        self.assertIn("Prototype an evidence packet audit lane", memo)
+        self.assertIn("Confidence: Medium", memo)
+        self.assertIn("Map one prior auth workflow", memo)
+        self.assertIn("Contrast concrete prior auth workflow proof", memo)
         self.assertIn("Generic agent platform launch", memo)
         self.assertIn("Watchlist: audit-lane", memo)
+        self.assertNotIn("Prototype it against one denial queue this week", memo)
+
+    def test_weekly_memo_excludes_low_fit_recalls_from_signals(self) -> None:
+        memory = {"version": 2, "events": [], "daily_briefs": []}
+        latest_brief = {
+            "date": "2026-04-14",
+            "operator_moves": {"top_insight": "Prior auth is still the wedge."},
+            "story_cards": [
+                latest_story("CMS prior auth evidence exchange"),
+                recall_story(),
+            ],
+        }
+
+        with patch("weekly_memo.local_now", return_value=FIXED_NOW):
+            memo = build_weekly_memo_markdown(
+                memory=memory,
+                latest_brief=latest_brief,
+                selection_audit={"stories": []},
+            )
+
+        signals_section = memo.split("## Signals That Matter", 1)[1].split(
+            "## Product / Build Opportunities",
+            1,
+        )[0]
+
+        self.assertIn("CMS prior auth evidence exchange", signals_section)
+        self.assertNotIn("FDA Class I infusion pump recall", signals_section)
+        self.assertIn("FDA Class I infusion pump recall", memo)
+        self.assertIn("outside the core operator wedges", memo)
 
     def test_write_weekly_memo_uses_local_files(self) -> None:
         memory = {"version": 2, "events": [], "daily_briefs": []}
@@ -180,6 +230,7 @@ class WeeklyMemoTests(unittest.TestCase):
             self.assertEqual(memo, output_path.read_text(encoding="utf-8"))
             self.assertIn("Saved artifact only", memo)
             self.assertIn("Saved prior auth story", memo)
+            self.assertIn("Confidence: Low", memo)
 
 
 if __name__ == "__main__":
