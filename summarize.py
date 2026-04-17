@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Dict, List
 
 from openai import OpenAI
@@ -246,6 +247,17 @@ OPERATING_DETAIL_RULES = [
     ("follow-up closure", ["care coordination", "follow-up", "discharge", "transition of care"]),
 ]
 
+DETAIL_TOKEN_STOPWORDS = {
+    "and",
+    "around",
+    "for",
+    "from",
+    "into",
+    "the",
+    "with",
+    "work",
+}
+
 WORKFLOW_SPECIFIC_ACTIONS = {
     "prior auth": {
         "actors": "prior-auth managers, denials leads, and integration owners",
@@ -396,6 +408,21 @@ def sentence_start(text: str) -> str:
     return value[0].upper() + value[1:]
 
 
+def summary_is_usable(text: str) -> bool:
+    value = " ".join(str(text or "").split()).strip()
+    if not value:
+        return False
+    if value[-1] in ",;:":
+        return False
+    if re.search(r"(?<![A-Z]\.)\b[A-Z]\.$", value):
+        return False
+    if value.count("(") > value.count(")"):
+        return False
+    if value.count("[") > value.count("]"):
+        return False
+    return True
+
+
 def item_detail_phrase(item: Dict[str, object]) -> str:
     text = item_text_blob(item).lower()
     details: List[str] = []
@@ -447,10 +474,44 @@ def item_has_market_signal(item: Dict[str, object]) -> bool:
     )
 
 
+def quality_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", str(value or "").lower())
+        if token not in DETAIL_TOKEN_STOPWORDS
+    }
+
+
+def has_redundant_detail_suffix(text: str) -> bool:
+    lowered = str(text or "").lower()
+    for detail, _keywords in OPERATING_DETAIL_RULES:
+        marker = f" around {detail.lower()}"
+        if marker not in lowered:
+            continue
+        before_marker = lowered.split(marker, 1)[0]
+        detail_tokens = quality_tokens(detail)
+        if detail_is_already_covered(quality_tokens(before_marker), detail_tokens):
+            return True
+    return False
+
+
+def detail_is_already_covered(base_tokens: set[str], detail_tokens: set[str]) -> bool:
+    if not detail_tokens:
+        return False
+    overlap = base_tokens & detail_tokens
+    return detail_tokens <= base_tokens or (
+        len(overlap) >= 2 and len(overlap) / len(detail_tokens) >= 0.6
+    )
+
+
 def detail_suffix(base_action: str, detail: str) -> str:
     if not detail:
         return ""
     if detail.lower() in base_action.lower():
+        return ""
+    base_tokens = quality_tokens(base_action)
+    detail_tokens = quality_tokens(detail)
+    if detail_is_already_covered(base_tokens, detail_tokens):
         return ""
     return f" around {detail}"
 
@@ -460,6 +521,8 @@ def why_it_matters_is_specific(text: str) -> bool:
     if not lowered:
         return False
     if any(phrase in lowered for phrase in GENERIC_WHY_IT_MATTERS_PHRASES):
+        return False
+    if has_redundant_detail_suffix(lowered):
         return False
     mentions_workflow = any(
         keyword in lowered
@@ -690,7 +753,7 @@ Additional category rule:
         why_it_matters = fallback_why_it_matters(item)
         signal = normalize_signal(item, "medium")
 
-    if not summary:
+    if not summary_is_usable(summary):
         summary = fallback_summary(item)
     if not why_it_matters_is_specific(why_it_matters):
         why_it_matters = fallback_why_it_matters(item)

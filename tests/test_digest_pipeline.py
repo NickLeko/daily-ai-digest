@@ -21,7 +21,12 @@ from data import (
     select_scored_items,
     select_regulatory_items,
 )
-from formatter import format_digest_html, format_operator_brief_html, select_daily_stories
+from formatter import (
+    format_digest_html,
+    format_operator_brief_html,
+    select_daily_stories,
+    sentence_limited,
+)
 from memory import build_memory_snapshot
 from operator_brief import select_story_cards, story_is_surface_worthy
 from scoring import attach_priority_scores, build_top_picks
@@ -29,6 +34,7 @@ from summarize import (
     fallback_digest_strategy,
     fallback_why_it_matters,
     parse_json_payload,
+    summary_is_usable,
     summarize_items,
     top_insight_is_specific,
     why_it_matters_is_specific,
@@ -222,6 +228,45 @@ class FormatterTests(unittest.TestCase):
         self.assertNotIn("Extra summary noise.", html)
         self.assertNotIn("Extra why noise.", html)
 
+    def test_daily_operator_digest_headlines_do_not_repeat_story_titles(self) -> None:
+        first_story = operator_story(
+            "first",
+            "The case for network-based interoperability",
+            category="News",
+        )
+        second_story = operator_story(
+            "second",
+            "Establishing 5G connectivity to enable a smart regional health system",
+            category="News",
+        )
+        brief = {
+            "summary": {"raw_item_count": 6, "story_count": 2, "story_card_count": 2},
+            "story_cards": [first_story, second_story],
+            "stories": [],
+        }
+
+        html = format_operator_brief_html(brief, story_limit=4)
+
+        self.assertIn("HEADLINES", html)
+        self.assertEqual(html.count("The case for network-based interoperability"), 1)
+        self.assertEqual(
+            html.count("Establishing 5G connectivity to enable a smart regional health system"),
+            1,
+        )
+        self.assertIn("2 news stories selected from 6 screened items.", html)
+        self.assertNotIn("2 stories from 6 screened items: 2 news items.", html)
+
+    def test_sentence_limited_keeps_us_abbreviation_intact(self) -> None:
+        summary = (
+            "Deloitte's 2026 U.S. health care outlook says health systems are "
+            "prioritizing interoperability. Second sentence should not render."
+        )
+
+        self.assertEqual(
+            sentence_limited(summary, 1),
+            "Deloitte's 2026 U.S. health care outlook says health systems are prioritizing interoperability.",
+        )
+
     def test_daily_operator_digest_backfills_when_story_cards_are_below_minimum(self) -> None:
         selected_story = operator_story(
             "selected",
@@ -271,7 +316,7 @@ class FormatterTests(unittest.TestCase):
             [story["story_id"] for story in selected],
             ["selected", "strong-backfill", "medium-backfill"],
         )
-        self.assertIn("3 stories from 4 screened items", html)
+        self.assertIn("3 stories selected from 4 screened items", html)
         self.assertIn("CMS prior auth evidence exchange", html)
         self.assertIn("Prior auth operating benchmark", html)
         self.assertIn("CMS ACCESS participants signal payer workflow change", html)
@@ -295,7 +340,7 @@ class FormatterTests(unittest.TestCase):
         html = format_operator_brief_html(brief, story_limit=4)
 
         self.assertEqual([story["story_id"] for story in selected], ["first", "second", "third"])
-        self.assertIn("3 stories from 4 screened items", html)
+        self.assertIn("3 news stories selected from 4 screened items", html)
         self.assertNotIn("Extra eligible story", html)
 
     def test_single_story_daily_operator_digest_does_not_repeat_the_headline(self) -> None:
@@ -315,7 +360,7 @@ class FormatterTests(unittest.TestCase):
 
         self.assertNotIn("HEADLINES", html)
         self.assertEqual(html.count("Single CMS access story"), 1)
-        self.assertIn("1 story from 1 screened item", html)
+        self.assertIn("1 news story selected from 1 screened item", html)
 
     def test_daily_operator_digest_suppresses_near_duplicate_headlines(self) -> None:
         brief = {
@@ -1207,6 +1252,52 @@ class WhyItMattersTests(unittest.TestCase):
         self.assertIn("real pilot", repo_text.lower())
         self.assertIn("live market signal", news_text.lower())
         self.assertIn("update", regulatory_text.lower())
+
+    def test_interoperability_fallback_does_not_duplicate_fhir_api_detail(self) -> None:
+        text = fallback_why_it_matters(
+            {
+                **render_item("News", "Interoperability market signal"),
+                "raw_text": "FHIR API interoperability deployment for health system data exchange.",
+                "workflow_wedges": ["interoperability"],
+            }
+        )
+
+        self.assertTrue(why_it_matters_is_specific(text))
+        self.assertIn("inventory FHIR/API dependencies and brittle handoffs", text)
+        self.assertNotIn("around FHIR and API handoffs", text)
+
+        bad_text = (
+            "If you own interoperability and data exchange, treat this as a live market signal "
+            "and use the next 30 days to inventory FHIR/API dependencies and brittle handoffs "
+            "on active roadmap work around FHIR and API handoffs; integration leads and health IT owners "
+            "will feel it first."
+        )
+        self.assertFalse(why_it_matters_is_specific(bad_text))
+
+    def test_summarize_items_replaces_broken_summary_fragment(self) -> None:
+        response = type(
+            "Response",
+            (),
+            {
+                "output_text": (
+                    '{"summary":"Deloitte\'s 2026 U.",'
+                    '"why_it_matters":"Prior-auth managers should audit evidence exchange this week.",'
+                    '"signal":"medium"}'
+                )
+            },
+        )()
+        item = {
+            **render_item("News", "Prior Auth Market Update"),
+            "raw_text": "Prior authorization workflow automation update for payer evidence exchange.",
+            "workflow_wedges": ["prior auth"],
+        }
+
+        with patch("summarize.client.responses.create", return_value=response):
+            summarized = summarize_items([item])[0]
+
+        self.assertTrue(summary_is_usable(summarized["summary"]))
+        self.assertNotEqual(summarized["summary"], "Deloitte's 2026 U.")
+        self.assertIn("workflow-relevant market signal", summarized["summary"])
 
     def test_summarize_items_replaces_repeated_generic_why_it_matters_with_distinct_fallbacks(self) -> None:
         response = type(

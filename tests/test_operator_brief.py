@@ -322,7 +322,7 @@ class OperatorBriefTests(unittest.TestCase):
 
         self.assertIn("Daily AI Digest", html)
         self.assertNotIn("HEADLINES", html)
-        self.assertIn("1 story from 1 screened item", html)
+        self.assertIn("1 regulatory story selected from 1 screened item", html)
         self.assertIn("CMS final rule for prior authorization attachments", html)
         self.assertIn("CMS Newsroom | Confidence: High", html)
         self.assertNotIn("WHAT CHANGED SINCE YESTERDAY", html)

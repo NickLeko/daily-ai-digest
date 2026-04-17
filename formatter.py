@@ -107,6 +107,12 @@ RENDER_TITLE_STOPWORDS = {
     "with",
 }
 
+SENTENCE_ABBREVIATION_RE = re.compile(
+    r"\b(?:[A-Za-z]\.){2,}|\b(?:Dr|Mr|Mrs|Ms|Prof|Sr|Jr|Inc|Ltd|Corp|Co|vs|etc)\.",
+    re.IGNORECASE,
+)
+SENTENCE_DOT_PLACEHOLDER = "<DOT>"
+
 
 def render_signal_badge(signal: str) -> str:
     style = SIGNAL_STYLES.get(signal.lower(), SIGNAL_STYLES["medium"])
@@ -162,9 +168,13 @@ def sentence_limited(value: object, max_sentences: int = 1) -> str:
     if not text:
         return ""
 
+    protected_text = SENTENCE_ABBREVIATION_RE.sub(
+        lambda match: match.group(0).replace(".", SENTENCE_DOT_PLACEHOLDER),
+        text,
+    )
     sentences = [
-        match.group(0).strip()
-        for match in re.finditer(r"[^.!?]+(?:[.!?]+|$)", text)
+        match.group(0).replace(SENTENCE_DOT_PLACEHOLDER, ".").strip()
+        for match in re.finditer(r"[^.!?]+(?:[.!?]+|$)", protected_text)
         if match.group(0).strip()
     ]
     if not sentences:
@@ -787,10 +797,23 @@ def build_daily_story_header(
         for category, count in counts.items()
         if count
     ]
-    category_tail = f": {', '.join(category_parts)}" if category_parts else ""
+    screened_label = singular_plural(screened_count, "screened item")
+    if len(category_parts) == 1:
+        category = next(category for category, count in counts.items() if count)
+        category_story_label = {
+            "Repo": ("repo story", "repo stories"),
+            "News": ("news story", "news stories"),
+            "Regulatory": ("regulatory story", "regulatory stories"),
+        }[category]
+        return (
+            f"{singular_plural(len(stories), category_story_label[0], category_story_label[1])} "
+            f"selected from {screened_label}."
+        )
+
+    category_tail = f" ({', '.join(category_parts)})" if category_parts else ""
     return (
-        f"{singular_plural(len(stories), 'story', 'stories')} from "
-        f"{singular_plural(screened_count, 'screened item')}{category_tail}."
+        f"{singular_plural(len(stories), 'story', 'stories')} selected from "
+        f"{screened_label}{category_tail}."
     )
 
 
@@ -802,25 +825,10 @@ def render_daily_headlines(stories: List[Dict[str, object]]) -> str:
     if len(stories) == 1:
         return ""
 
-    rows = []
-    for story in stories:
-        rows.append(
-            f"""
-            <li style="margin: 0 0 6px 0;">
-              <a href="{escaped(story_url_for_render(story))}" style="color:#0b57d0; text-decoration:none; font-weight:700;">
-                {escaped(story_title_for_render(story))}
-              </a>
-            </li>
-            """
-        )
-
     return f"""
-        <p style="margin: 10px 0 6px 0; font-size: 12px; font-weight: 700; color:#555; letter-spacing: 0.02em;">
+        <p style="margin: 12px 0 8px 0; font-size: 12px; font-weight: 700; color:#555; letter-spacing: 0.02em;">
           HEADLINES
         </p>
-        <ol style="margin: 0 0 12px 20px; padding: 0;">
-          {''.join(rows)}
-        </ol>
     """
 
 
