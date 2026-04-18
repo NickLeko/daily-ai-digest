@@ -19,6 +19,7 @@ from config import (
 )
 from memory import DigestMemory, latest_previous_brief
 from scoring import OBJECTIVE_DISPLAY_ORDER
+from signal_quality import classify_mapping_materiality
 from state import local_now
 from summarize import (
     sentence_start,
@@ -130,6 +131,14 @@ STORY_TARGET_THEME_KEYS = {
     "llm_eval_rag_governance_safety",
 }
 RECALL_ENFORCEMENT_TOPIC_KEY = "recall_enforcement"
+
+NO_STRONG_SIGNAL_OPERATOR_MOVES = {
+    "top_insight": "No strong operator signal cleared today's quality bar.",
+    "content_angle": "",
+    "build_idea": "",
+    "interview_talking_point": "",
+    "watch_item": "Watch for concrete deployment, policy, reimbursement, or measurable workflow evidence before assigning roadmap time.",
+}
 
 
 def load_json_config(path: str, default: Dict[str, Any]) -> Dict[str, Any]:
@@ -257,8 +266,20 @@ def confidence_for_item(
     reliability_score: int,
     signal: str,
     support_count: int = 1,
+    signal_quality: str = "medium",
+    material_operator_signal: bool = True,
+    low_signal_announcement: bool = False,
 ) -> str:
     normalized_signal = str(signal or "medium").lower()
+    normalized_quality = str(signal_quality or "medium").lower()
+    if low_signal_announcement or normalized_quality == "weak" or not material_operator_signal:
+        return "Low"
+    if normalized_quality == "medium":
+        if reliability_score >= 85 and support_count >= 2 and normalized_signal == "high":
+            return "High"
+        if reliability_score >= 60:
+            return "Medium"
+        return "Low"
     if reliability_score >= 85 and support_count >= 2:
         return "High"
     if reliability_score >= 85 and normalized_signal in {"high", "medium"}:
@@ -468,6 +489,18 @@ def normalize_item(
     watchlist_matches = watchlist_matches_for_item(item, watchlist)
     summary = str(item.get("summary", "") or "").strip()
     why_it_matters = str(item.get("why_it_matters", "") or "").strip()
+    materiality = classify_mapping_materiality(item)
+    signal_quality = str(item.get("signal_quality") or materiality["signal_quality"])
+    low_signal_announcement = (
+        bool(item.get("low_signal_announcement"))
+        if "low_signal_announcement" in item
+        else bool(materiality["low_signal_announcement"])
+    )
+    material_operator_signal = (
+        bool(item.get("material_operator_signal"))
+        if "material_operator_signal" in item
+        else bool(materiality["material_operator_signal"])
+    )
     raw_excerpt = str(item.get("raw_text", "") or "").strip()[:240]
     signature = signature_tokens(
         " ".join(
@@ -535,6 +568,9 @@ def normalize_item(
         "confidence": confidence_for_item(
             reliability_score=reliability["score"],
             signal=str(item.get("signal", "medium") or "medium"),
+            signal_quality=signal_quality,
+            material_operator_signal=material_operator_signal,
+            low_signal_announcement=low_signal_announcement,
         ),
         "uncertainty": "Low" if reliability["score"] >= 85 else ("Medium" if reliability["score"] >= 60 else "High"),
         "why_it_matters": why_it_matters,
@@ -546,6 +582,17 @@ def normalize_item(
         "near_term_actionability": str(item.get("near_term_actionability", "low") or "low"),
         "is_generic_devtool": bool(item.get("is_generic_devtool")),
         "generic_repo_cap_exempt": bool(item.get("generic_repo_cap_exempt")),
+        "signal_quality": signal_quality,
+        "low_signal_announcement": low_signal_announcement,
+        "soft_funding_or_challenge": bool(item.get("soft_funding_or_challenge"))
+        if "soft_funding_or_challenge" in item
+        else bool(materiality["soft_funding_or_challenge"]),
+        "material_operator_signal": material_operator_signal,
+        "materiality_signals": [
+            str(value) for value in (item.get("materiality_signals") or materiality["materiality_signals"])
+        ],
+        "materiality_reason": str(item.get("materiality_reason") or materiality["materiality_reason"]),
+        "selection_penalties": [str(value) for value in item.get("selection_penalties", []) or []],
         "signature_tokens": unique(signature)[:10],
         "_item": item,
     }
@@ -701,6 +748,36 @@ def story_signal(story_score: float, lead_signal: str) -> str:
     return "low"
 
 
+SIGNAL_QUALITY_RANK = {"weak": 0, "medium": 1, "strong": 2}
+
+
+def strongest_signal_quality(items: List[Dict[str, Any]]) -> str:
+    return max(
+        (str(item.get("signal_quality", "medium") or "medium").lower() for item in items),
+        key=lambda quality: SIGNAL_QUALITY_RANK.get(quality, 1),
+        default="medium",
+    )
+
+
+def story_low_signal_announcement(story: Dict[str, Any]) -> bool:
+    if "low_signal_announcement" in story:
+        return bool(story.get("low_signal_announcement"))
+    return bool(classify_mapping_materiality(story)["low_signal_announcement"])
+
+
+def story_material_operator_signal(story: Dict[str, Any]) -> bool:
+    if "material_operator_signal" in story:
+        return bool(story.get("material_operator_signal"))
+    return bool(classify_mapping_materiality(story)["material_operator_signal"])
+
+
+def story_signal_quality_label(story: Dict[str, Any]) -> str:
+    explicit = str(story.get("signal_quality", "") or "").lower()
+    if explicit in SIGNAL_QUALITY_RANK:
+        return explicit
+    return str(classify_mapping_materiality(story)["signal_quality"])
+
+
 def build_story_why_it_matters(story: Dict[str, Any]) -> str:
     lead_item = story["_lead_item"]
     source_confidence = str(story.get("confidence", "Medium") or "Medium").lower()
@@ -708,6 +785,12 @@ def build_story_why_it_matters(story: Dict[str, Any]) -> str:
     actions = workflow_actions_for_item(lead_item["_item"])
     workflow_name = guidance["workflow"]
     item_type = lead_item["item_type"]
+
+    if story_low_signal_announcement(story):
+        return (
+            "Treat this as watchlist context, not a workflow trigger; revisit only if follow-on evidence shows "
+            f"deployment, policy, reimbursement, or measurable operator impact. Confidence is {source_confidence}."
+        )
 
     if lead_item.get("is_generic_devtool") and not lead_item.get("generic_repo_cap_exempt"):
         return (
@@ -746,6 +829,8 @@ def build_story_action(story: Dict[str, Any]) -> str:
     guidance = workflow_guidance_for_item(lead_item["_item"])
     actions = workflow_actions_for_item(lead_item["_item"])
 
+    if story_low_signal_announcement(story):
+        return "Do not move roadmap time without concrete deployment, policy, reimbursement, or workflow evidence."
     if lead_item.get("is_generic_devtool") and not lead_item.get("generic_repo_cap_exempt"):
         return "Pressure-test it on one governed workflow before assigning production roadmap weight."
     if lead_item["item_type"] == "regulatory":
@@ -788,6 +873,22 @@ def build_stories(
         reliability_score = max(int(item.get("reliability_score", 0) or 0) for item in cluster)
         objective_scores = objective_scores_for_story(cluster, reliability_score)
         support_count = len(cluster)
+        cluster_material_signal = any(bool(item.get("material_operator_signal")) for item in cluster)
+        cluster_signal_quality = "strong" if cluster_material_signal else strongest_signal_quality(cluster)
+        cluster_low_signal_announcement = bool(lead_item.get("low_signal_announcement")) and not cluster_material_signal
+        cluster_soft_funding_or_challenge = any(bool(item.get("soft_funding_or_challenge")) for item in cluster)
+        cluster_materiality_signals = unique(
+            str(signal)
+            for item in cluster
+            for signal in (item.get("materiality_signals") or [])
+            if str(signal).strip()
+        )
+        cluster_selection_penalties = unique(
+            str(penalty)
+            for item in cluster
+            for penalty in (item.get("selection_penalties") or [])
+            if str(penalty).strip()
+        )
         thesis_links = unique(
             [
                 json.dumps(
@@ -831,6 +932,21 @@ def build_stories(
             - (3.0 if lead_item.get("is_generic_devtool") and not lead_item.get("generic_repo_cap_exempt") else 0.0),
             2,
         )
+        if cluster_low_signal_announcement:
+            cluster_selection_penalties = unique(
+                [
+                    *cluster_selection_penalties,
+                    "story_score_demoted_for_soft_announcement",
+                    "confidence_capped_by_materiality",
+                ]
+            )
+            story_score = round(
+                max(
+                    0.0,
+                    story_score - (10.0 if cluster_soft_funding_or_challenge else 7.0),
+                ),
+                2,
+            )
         if docs_only_repo:
             story_score = round(max(0.0, story_score - 8.0), 2)
         story = {
@@ -891,6 +1007,9 @@ def build_stories(
                 reliability_score=reliability_score,
                 signal=str(lead_item.get("signal", "medium") or "medium"),
                 support_count=support_count,
+                signal_quality=cluster_signal_quality,
+                material_operator_signal=cluster_material_signal,
+                low_signal_announcement=cluster_low_signal_announcement,
             ),
             "uncertainty": "Low" if reliability_score >= 85 else ("Medium" if reliability_score >= 60 else "High"),
             "story_score": story_score,
@@ -910,11 +1029,28 @@ def build_stories(
             "near_term_actionability": lead_item.get("near_term_actionability", "low"),
             "is_generic_devtool": bool(lead_item.get("is_generic_devtool")),
             "generic_repo_cap_exempt": bool(lead_item.get("generic_repo_cap_exempt")),
+            "signal_quality": cluster_signal_quality,
+            "low_signal_announcement": cluster_low_signal_announcement,
+            "soft_funding_or_challenge": cluster_soft_funding_or_challenge,
+            "material_operator_signal": cluster_material_signal,
+            "materiality_signals": cluster_materiality_signals,
+            "materiality_reason": (
+                "soft announcement without concrete operator materiality"
+                if cluster_low_signal_announcement
+                else str(lead_item.get("materiality_reason", "") or "")
+            ),
+            "selection_penalties": cluster_selection_penalties,
             "docs_only_repo": docs_only_repo,
             "signature_tokens": story_signature,
             "_lead_item": lead_item,
             "_items": cluster,
         }
+        if cluster_low_signal_announcement:
+            for objective in OBJECTIVE_DISPLAY_ORDER:
+                story["objective_scores"][objective] = round(
+                    max(0.0, float(story["objective_scores"].get(objective, 0.0) or 0.0) - 1.8),
+                    2,
+                )
         if docs_only_repo:
             for objective in ("career", "build", "content"):
                 story["objective_scores"][objective] = round(
@@ -1409,6 +1545,8 @@ def story_has_target_fit(story: Dict[str, Any]) -> bool:
 
     if bool(story.get("docs_only_repo")):
         return False
+    if story_low_signal_announcement(story) or story_signal_quality_label(story) == "weak":
+        return False
 
     if category == "Regulatory":
         regulatory_score = float((story.get("objective_scores", {}) or {}).get("regulatory", 0.0) or 0.0)
@@ -1450,6 +1588,10 @@ def story_has_target_fit(story: Dict[str, Any]) -> bool:
 
 
 def story_surface_worthiness(story: Dict[str, Any]) -> Tuple[bool, str]:
+    if story_low_signal_announcement(story):
+        return False, "soft announcement lacks concrete operator materiality."
+    if story_signal_quality_label(story) == "weak":
+        return False, "story signal quality is weak."
     if not story_has_target_fit(story):
         return False, "target-fit check failed."
     if story.get("reliability_label") == "Low" and int(story.get("supporting_item_count", 0) or 0) < 2:
@@ -1719,7 +1861,11 @@ def build_operator_brief_artifact(
         watchlist_hits=watchlist_hits,
         previous_brief=previous_brief,
     )
-    operator_moves = build_strategy_brief(story_cards, memory_snapshot or {})
+    operator_moves = (
+        build_strategy_brief(story_cards, memory_snapshot or {})
+        if story_cards
+        else dict(NO_STRONG_SIGNAL_OPERATOR_MOVES)
+    )
 
     apply_story_metadata_to_items(items, normalized_items)
 

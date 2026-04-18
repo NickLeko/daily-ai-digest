@@ -26,6 +26,7 @@ from memory import (
 from selection_audit import (
     SELECTION_AUDIT_FILE_PATH,
     SELECTION_AUDIT_MARKDOWN_FILE_PATH,
+    build_selection_diagnostics,
     write_selection_audit,
 )
 from state import already_sent_today, local_now, mark_sent
@@ -90,6 +91,20 @@ def save_artifacts(operator_brief: dict[str, object], html: str, cockpit_html: s
         f.write(cockpit_html)
 
 
+def log_json_event(label: str, payload: dict[str, object]) -> None:
+    log(f"{label}: {json.dumps(payload, sort_keys=True)}")
+
+
+def log_selection_diagnostics(diagnostics: dict[str, object]) -> None:
+    for story in diagnostics.get("selected_stories", []) or []:
+        if isinstance(story, dict):
+            log_json_event("Selected story diagnostic", story)
+
+    fallback = diagnostics.get("no_signal_fallback", {}) or {}
+    if isinstance(fallback, dict) and fallback.get("triggered"):
+        log_json_event("No-signal fallback diagnostic", fallback)
+
+
 def run(*, dry_run: bool = False, digest_mode: str = DIGEST_MODE) -> None:
     digest_mode = normalize_digest_mode(digest_mode)
     memory = load_digest_memory()
@@ -134,6 +149,12 @@ def run(*, dry_run: bool = False, digest_mode: str = DIGEST_MODE) -> None:
         f"{operator_brief['summary']['story_count']} stories from "
         f"{operator_brief['summary']['raw_item_count']} screened items."
     )
+    selection_diagnostics = build_selection_diagnostics(
+        operator_brief,
+        mode=digest_mode,
+    )
+    operator_brief["selection_diagnostics"] = selection_diagnostics
+    log_selection_diagnostics(selection_diagnostics)
 
     log(f"Formatting {digest_mode} HTML email...")
     html = format_operator_brief_html(operator_brief, mode=digest_mode)
@@ -144,11 +165,11 @@ def run(*, dry_run: bool = False, digest_mode: str = DIGEST_MODE) -> None:
     subject = f"{subject_prefix}{subject_label} - {local_now().strftime('%Y-%m-%d')}"
 
     save_artifacts(operator_brief, html, cockpit_html)
+    write_selection_audit(operator_brief)
+    log(f"Selection audit saved to {SELECTION_AUDIT_FILE_PATH}")
+    log(f"Selection audit summary saved to {SELECTION_AUDIT_MARKDOWN_FILE_PATH}")
 
     if dry_run:
-        write_selection_audit(operator_brief)
-        log(f"Selection audit saved to {SELECTION_AUDIT_FILE_PATH}")
-        log(f"Selection audit summary saved to {SELECTION_AUDIT_MARKDOWN_FILE_PATH}")
         log("Dry run complete. Local artifacts were written and no email or state updates were performed.")
         return
 

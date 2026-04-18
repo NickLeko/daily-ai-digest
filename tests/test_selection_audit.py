@@ -2,7 +2,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from selection_audit import build_selection_audit, render_selection_audit_markdown, write_selection_audit
+from selection_audit import (
+    build_selection_audit,
+    build_selection_diagnostics,
+    render_selection_audit_markdown,
+    write_selection_audit,
+)
 
 
 def story(
@@ -20,6 +25,11 @@ def story(
     supporting_item_count: int = 1,
     topic_key: str = "",
     matched_themes: list[str] | None = None,
+    confidence: str = "High",
+    signal_quality: str = "strong",
+    low_signal_announcement: bool = False,
+    material_operator_signal: bool = True,
+    selection_penalties: list[str] | None = None,
 ) -> dict[str, object]:
     return {
         "story_id": story_id,
@@ -48,6 +58,14 @@ def story(
         "priority_score": story_score,
         "story_score": story_score,
         "signal": "high",
+        "confidence": confidence,
+        "signal_quality": signal_quality,
+        "materiality_reason": "concrete policy, deployment, capability, or workflow consequence",
+        "material_operator_signal": material_operator_signal,
+        "low_signal_announcement": low_signal_announcement,
+        "soft_funding_or_challenge": low_signal_announcement,
+        "materiality_signals": ["deployment"] if material_operator_signal else [],
+        "selection_penalties": selection_penalties or [],
         "operator_relevance": operator_relevance,
         "near_term_actionability": actionability,
         "workflow_wedges": workflow_wedges if workflow_wedges is not None else ["prior auth"],
@@ -125,6 +143,72 @@ class SelectionAuditTests(unittest.TestCase):
         self.assertIn("Generic market news", markdown)
         self.assertIn("## Most Common Exclusion Reasons", markdown)
         self.assertIn("Target-fit failures among filtered stories: 1", markdown)
+
+    def test_selection_diagnostics_emit_selected_story_fields(self) -> None:
+        selected = story(
+            "selected",
+            "Selected prior auth story",
+            confidence="High",
+            signal_quality="strong",
+            selection_penalties=["generic_devtool_score_penalty"],
+        )
+        brief = {
+            "summary": {"raw_item_count": 1},
+            "stories": [selected],
+            "story_cards": [selected],
+            "items": [item("item-selected", selected)],
+        }
+
+        diagnostics = build_selection_diagnostics(brief, mode="daily")
+        selected_diagnostic = diagnostics["selected_stories"][0]
+
+        self.assertEqual(selected_diagnostic["title"], "Selected prior auth story")
+        self.assertEqual(selected_diagnostic["source"], "Example")
+        self.assertEqual(selected_diagnostic["signal_quality"], "strong")
+        self.assertEqual(selected_diagnostic["materiality_tier"], "strong")
+        self.assertEqual(selected_diagnostic["operator_relevance"], "high")
+        self.assertEqual(selected_diagnostic["confidence"], "High")
+        self.assertEqual(selected_diagnostic["admission_decision"], "daily_selected")
+        self.assertEqual(
+            selected_diagnostic["primary_reason_selected"],
+            "Selected for shorter daily digest from story_cards.",
+        )
+        self.assertIn(
+            "generic_devtool_score_penalty",
+            selected_diagnostic["penalties_demotions"],
+        )
+        self.assertFalse(diagnostics["no_signal_fallback"]["triggered"])
+
+    def test_selection_diagnostics_explain_no_signal_fallback(self) -> None:
+        weak = story(
+            "weak",
+            "HHS launches $4M KidneyX challenge",
+            story_score=12.0,
+            operator_relevance="low",
+            actionability="low",
+            workflow_wedges=["care coordination"],
+            matched_themes=[],
+            confidence="Low",
+            signal_quality="weak",
+            low_signal_announcement=True,
+            material_operator_signal=False,
+            selection_penalties=["soft_funding_challenge_demoted"],
+        )
+        brief = {
+            "summary": {"raw_item_count": 1},
+            "stories": [weak],
+            "story_cards": [],
+            "items": [item("item-weak", weak)],
+        }
+
+        diagnostics = build_selection_diagnostics(brief, mode="daily")
+        fallback = diagnostics["no_signal_fallback"]
+
+        self.assertEqual(diagnostics["selected_stories"], [])
+        self.assertTrue(fallback["triggered"])
+        self.assertIn("no story cards passed admission gates", fallback["reason"])
+        self.assertIn("soft announcement", fallback["reason"])
+        self.assertEqual(fallback["screened_item_count"], 1)
 
     def test_selection_audit_reports_repo_gate_and_daily_limit(self) -> None:
         cards = [

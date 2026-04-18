@@ -5,6 +5,7 @@ from typing import Dict, List
 from openai import OpenAI
 
 from config import OPENAI_API_KEY, OPENAI_MODEL, PRIORITY_THEME_RULES
+from signal_quality import classify_mapping_materiality
 
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -581,6 +582,12 @@ def top_insight_is_specific(text: str) -> bool:
 def fallback_summary(item: Dict[str, object]) -> str:
     guidance = workflow_guidance_for_item(item)
     title = str(item.get("title", "This item") or "This item")
+    materiality = classify_mapping_materiality(item)
+    if item.get("low_signal_announcement") or materiality["low_signal_announcement"]:
+        return (
+            f"{title} is a soft announcement, not an operator-grade workflow signal. "
+            f"Treat it as watchlist context until it produces concrete deployment, policy, reimbursement, or measurable workflow evidence."
+        )
     if item.get("category") == "Regulatory":
         return (
             f"{title} is a regulatory signal touching {guidance['workflow']}. "
@@ -598,6 +605,13 @@ def fallback_summary(item: Dict[str, object]) -> str:
 
 
 def fallback_why_it_matters(item: Dict[str, object]) -> str:
+    materiality = classify_mapping_materiality(item)
+    if item.get("low_signal_announcement") or materiality["low_signal_announcement"]:
+        return (
+            "Do not assign roadmap or backlog time from this item alone; revisit only if follow-on evidence shows "
+            "a real deployment, policy requirement, reimbursement change, or measurable workflow impact in the next 30 days."
+        )
+
     guidance = workflow_guidance_for_item(item)
     workflow_actions = workflow_actions_for_item(item)
     detail = item_detail_phrase(item)
@@ -639,6 +653,9 @@ def normalize_signal(item: Dict[str, object], signal: str) -> str:
     normalized = (signal or "medium").strip().lower()
     if normalized not in {"high", "medium", "low"}:
         normalized = "medium"
+    materiality = classify_mapping_materiality(item)
+    if item.get("low_signal_announcement") or materiality["low_signal_announcement"]:
+        return "low"
     if item.get("is_speculative_low_roi") and normalized == "high":
         return "medium"
     if item.get("is_generic_devtool") and not item.get("generic_repo_cap_exempt") and normalized == "high":
@@ -752,6 +769,18 @@ Additional category rule:
         summary = fallback_summary(item)
         why_it_matters = fallback_why_it_matters(item)
         signal = normalize_signal(item, "medium")
+
+    materiality_item = {
+        **item,
+        "summary": summary,
+        "why_it_matters": why_it_matters,
+        "signal": signal,
+    }
+    materiality = classify_mapping_materiality(materiality_item)
+    if item.get("low_signal_announcement") or materiality["low_signal_announcement"]:
+        summary = fallback_summary(materiality_item)
+        why_it_matters = fallback_why_it_matters(materiality_item)
+        signal = "low"
 
     if not summary_is_usable(summary):
         summary = fallback_summary(item)

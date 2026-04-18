@@ -6,6 +6,8 @@ from typing import Any, Dict, List
 
 from formatter import (
     DAILY_STORY_LIMIT,
+    daily_story_passes_render_quality,
+    single_daily_story_is_worthy,
     select_daily_stories,
     stories_are_render_duplicates,
     story_id_for_render,
@@ -14,6 +16,7 @@ from operator_brief import (
     max_story_objective_score,
     story_has_target_fit,
     story_is_surface_worthy,
+    story_surface_worthiness,
     story_surface_worthiness_reason,
 )
 from state import local_now
@@ -42,6 +45,44 @@ def score_summary(entry: Dict[str, Any]) -> Dict[str, Any]:
         "reliability_label": str(entry.get("reliability_label", "") or ""),
         "signal": str(entry.get("signal", "") or ""),
     }
+
+
+def story_lookup_by_id(operator_brief: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    return {
+        str(story.get("story_id", "") or ""): story
+        for story in operator_brief.get("stories", []) or []
+        if isinstance(story, dict) and str(story.get("story_id", "") or "").strip()
+    }
+
+
+def selection_penalties(entry: Dict[str, Any]) -> List[str]:
+    penalties = [
+        str(value)
+        for value in entry.get("selection_penalties", []) or []
+        if str(value).strip()
+    ]
+    if entry.get("low_signal_announcement"):
+        penalties.extend(
+            [
+                "soft_announcement_demoted",
+                "confidence_capped_by_materiality",
+            ]
+        )
+    if str(entry.get("signal_quality", "") or "").lower() == "weak":
+        penalties.append("weak_signal_quality_confidence_cap")
+    if entry.get("is_generic_devtool") and not entry.get("generic_repo_cap_exempt"):
+        penalties.append("generic_devtool_score_penalty")
+    if entry.get("docs_only_repo"):
+        penalties.append("docs_only_repo_score_penalty")
+
+    seen = set()
+    result: List[str] = []
+    for penalty in penalties:
+        if penalty in seen:
+            continue
+        seen.add(penalty)
+        result.append(penalty)
+    return result
 
 
 def repo_healthcare_anchor_gate(entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -84,11 +125,17 @@ def story_primary_reason(
         return "Selected for operator story cards."
     if daily_selected:
         return "Selected as controlled daily backfill from broader stories."
+    surface_passes, surface_reason = story_surface_worthiness(story)
+    if not surface_passes and (
+        "soft announcement" in surface_reason
+        or "signal quality" in surface_reason
+    ):
+        return f"Filtered because {surface_reason}"
     if not story_has_target_fit(story):
         return "Filtered because target-fit check failed."
     if story.get("reliability_label") == "Low" and int(story.get("supporting_item_count", 0) or 0) < 2:
         return "Filtered because reliability is low without corroborating support."
-    if not story_is_surface_worthy(story):
+    if not surface_passes:
         return f"Filtered because {story_surface_worthiness_reason(story)}"
     return "Filtered by story-card cap or ordering after higher-ranked eligible stories filled the digest."
 
@@ -122,6 +169,10 @@ def daily_story_decisions(operator_brief: Dict[str, Any]) -> Dict[str, Dict[str,
             status = "filtered"
             reason = "Filtered from daily digest because the shorter daily story limit was already filled."
             duplicate_affected = False
+        elif not daily_story_passes_render_quality(story):
+            status = "filtered"
+            reason = "Filtered from daily digest by the final daily signal-quality gate."
+            duplicate_affected = False
         else:
             status = "selected"
             reason = "Selected for shorter daily digest from story_cards."
@@ -129,6 +180,14 @@ def daily_story_decisions(operator_brief: Dict[str, Any]) -> Dict[str, Dict[str,
             if story_id:
                 seen.add(story_id)
             selected_so_far.append(story)
+
+        if status == "selected" and story_id not in selected_daily_ids:
+            status = "filtered"
+            reason = (
+                "Filtered from daily digest by the stricter single-story quality gate."
+                if len(selected_so_far) == 1 and not single_daily_story_is_worthy(story)
+                else "Filtered from daily digest by the final daily quality gate."
+            )
 
         decisions[story_id] = {
             "status": status,
@@ -216,6 +275,19 @@ def build_story_audit(operator_brief: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "matched_themes": [str(value) for value in story.get("matched_themes", []) or []],
                 },
                 "score_summary": score_summary(story),
+                "materiality": {
+                    "signal_quality": str(story.get("signal_quality", "") or ""),
+                    "materiality_tier": str(story.get("signal_quality", "") or ""),
+                    "materiality_reason": str(story.get("materiality_reason", "") or ""),
+                    "material_operator_signal": bool(story.get("material_operator_signal")),
+                    "low_signal_announcement": bool(story.get("low_signal_announcement")),
+                    "soft_funding_or_challenge": bool(story.get("soft_funding_or_challenge")),
+                    "materiality_signals": [
+                        str(value) for value in story.get("materiality_signals", []) or []
+                    ],
+                },
+                "confidence": str(story.get("confidence", "") or story.get("reliability_label", "") or ""),
+                "penalties_demotions": selection_penalties(story),
                 "surface_worthiness": {
                     "passes": story_is_surface_worthy(story),
                     "reason": story_surface_worthiness_reason(story),
@@ -274,6 +346,19 @@ def build_item_audit(
                     "matched_themes": [str(value) for value in item.get("matched_themes", []) or []],
                 },
                 "score_summary": score_summary(item),
+                "materiality": {
+                    "signal_quality": str(item.get("signal_quality", "") or ""),
+                    "materiality_tier": str(item.get("signal_quality", "") or ""),
+                    "materiality_reason": str(item.get("materiality_reason", "") or ""),
+                    "material_operator_signal": bool(item.get("material_operator_signal")),
+                    "low_signal_announcement": bool(item.get("low_signal_announcement")),
+                    "soft_funding_or_challenge": bool(item.get("soft_funding_or_challenge")),
+                    "materiality_signals": [
+                        str(value) for value in item.get("materiality_signals", []) or []
+                    ],
+                },
+                "confidence": str(item.get("confidence", "") or item.get("reliability_label", "") or ""),
+                "penalties_demotions": selection_penalties(item),
                 "repo_healthcare_anchor_gate": repo_healthcare_anchor_gate(item),
                 "duplicate_suppression": {
                     "affected": parent_duplicate,
@@ -309,6 +394,140 @@ def build_selection_audit(operator_brief: Dict[str, Any]) -> Dict[str, Any]:
         },
         "stories": story_rows,
         "items": item_rows,
+    }
+
+
+def reason_counts(rows: List[Dict[str, Any]], *, key: str) -> Dict[str, int]:
+    counts = Counter(str(row.get(key, "") or "unknown") for row in rows)
+    return dict(counts.most_common())
+
+
+def daily_reason_counts(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    counts = Counter(
+        str((row.get("shorter_digest_selection", {}) or {}).get("reason", "") or "unknown")
+        for row in rows
+    )
+    return dict(counts.most_common())
+
+
+def no_signal_fallback_diagnostic(audit: Dict[str, Any]) -> Dict[str, Any]:
+    stories = [row for row in audit.get("stories", []) or [] if isinstance(row, dict)]
+    daily_selected = [
+        row
+        for row in stories
+        if (row.get("shorter_digest_selection", {}) or {}).get("selected")
+    ]
+    if daily_selected:
+        return {
+            "triggered": False,
+            "reason": "",
+            "screened_item_count": int((audit.get("summary", {}) or {}).get("raw_item_count", 0) or 0),
+            "story_count": len(stories),
+            "story_card_count": int((audit.get("summary", {}) or {}).get("story_card_count", 0) or 0),
+        }
+
+    screened_item_count = int((audit.get("summary", {}) or {}).get("raw_item_count", 0) or 0)
+    story_card_count = int((audit.get("summary", {}) or {}).get("story_card_count", 0) or 0)
+    filtered = [row for row in stories if not row.get("selected")]
+    daily_filtered = [
+        row
+        for row in stories
+        if (row.get("shorter_digest_selection", {}) or {}).get("status") == "filtered"
+    ]
+
+    if not stories:
+        reason = "no stories were built from screened items"
+    elif story_card_count == 0:
+        top_reasons = reason_counts(filtered, key="primary_reason")
+        top_reason = next(iter(top_reasons), "no story cards passed admission gates")
+        reason = f"no story cards passed admission gates: {compact_reason(top_reason)}"
+    elif daily_filtered:
+        top_daily_reasons = daily_reason_counts(daily_filtered)
+        top_reason = next(iter(top_daily_reasons), "daily quality gate filtered all selected story cards")
+        reason = f"daily render selected no stories: {compact_reason(top_reason)}"
+    else:
+        reason = "daily render selected no stories after quality and duplicate gates"
+
+    return {
+        "triggered": True,
+        "reason": reason,
+        "screened_item_count": screened_item_count,
+        "story_count": len(stories),
+        "story_card_count": story_card_count,
+        "filtered_reason_counts": reason_counts(filtered, key="primary_reason"),
+        "daily_filter_reason_counts": daily_reason_counts(daily_filtered),
+    }
+
+
+def diagnostic_source(row: Dict[str, Any]) -> str:
+    sources = row.get("sources", []) or []
+    if sources:
+        return ", ".join(str(source) for source in sources[:2])
+    return str(row.get("source", "") or "")
+
+
+def story_selection_diagnostic(
+    row: Dict[str, Any],
+    story: Dict[str, Any],
+    *,
+    mode: str,
+) -> Dict[str, Any]:
+    daily = row.get("shorter_digest_selection", {}) or {}
+    daily_selected = bool(daily.get("selected"))
+    story_card_selected = bool(row.get("story_card_selected"))
+    if mode == "daily":
+        admission_decision = "daily_selected" if daily_selected else str(daily.get("status", "not_considered"))
+        primary_reason = str(daily.get("reason", "") or row.get("primary_reason", ""))
+    else:
+        admission_decision = "story_card_selected" if story_card_selected else str(row.get("status", "filtered"))
+        primary_reason = str(row.get("primary_reason", ""))
+
+    return {
+        "story_id": str(row.get("story_id", "") or ""),
+        "title": str(row.get("title", "") or ""),
+        "source": diagnostic_source(row),
+        "signal_quality": str((row.get("materiality", {}) or {}).get("signal_quality", "") or story.get("signal_quality", "")),
+        "materiality_tier": str((row.get("materiality", {}) or {}).get("materiality_tier", "") or story.get("signal_quality", "")),
+        "materiality_reason": str((row.get("materiality", {}) or {}).get("materiality_reason", "") or story.get("materiality_reason", "")),
+        "operator_relevance": str((row.get("target_fit", {}) or {}).get("operator_relevance", "") or story.get("operator_relevance", "")),
+        "confidence": str(row.get("confidence", "") or story.get("confidence", "")),
+        "admission_decision": admission_decision,
+        "primary_reason_selected": primary_reason,
+        "penalties_demotions": row.get("penalties_demotions", []) or selection_penalties(story),
+    }
+
+
+def build_selection_diagnostics(
+    operator_brief: Dict[str, Any],
+    *,
+    mode: str = "daily",
+) -> Dict[str, Any]:
+    normalized_mode = str(mode or "daily").strip().lower()
+    audit = build_selection_audit(operator_brief)
+    story_lookup = story_lookup_by_id(operator_brief)
+    stories = [row for row in audit.get("stories", []) or [] if isinstance(row, dict)]
+    if normalized_mode == "daily":
+        selected_rows = [
+            row
+            for row in stories
+            if (row.get("shorter_digest_selection", {}) or {}).get("selected")
+        ]
+    else:
+        selected_rows = [row for row in stories if row.get("story_card_selected")]
+
+    return {
+        "version": 1,
+        "mode": normalized_mode,
+        "generated_at": audit["generated_at"],
+        "selected_stories": [
+            story_selection_diagnostic(
+                row,
+                story_lookup.get(str(row.get("story_id", "") or ""), {}),
+                mode=normalized_mode,
+            )
+            for row in selected_rows
+        ],
+        "no_signal_fallback": no_signal_fallback_diagnostic(audit),
     }
 
 

@@ -28,7 +28,7 @@ from formatter import (
     sentence_limited,
 )
 from memory import build_memory_snapshot
-from operator_brief import select_story_cards, story_is_surface_worthy
+from operator_brief import build_operator_brief_artifact, select_story_cards, story_is_surface_worthy
 from scoring import attach_priority_scores, build_top_picks
 from summarize import (
     fallback_digest_strategy,
@@ -69,6 +69,10 @@ def operator_story(
     topic_key: str = "",
     supporting_item_count: int = 1,
     watchlist_matches: list[dict[str, str]] | None = None,
+    confidence: str | None = None,
+    signal_quality: str = "strong",
+    low_signal_announcement: bool = False,
+    material_operator_signal: bool = True,
 ) -> dict[str, object]:
     return {
         "story_id": story_id,
@@ -78,7 +82,7 @@ def operator_story(
         "canonical_url": f"https://example.com/{story_id}",
         "url": f"https://example.com/{story_id}",
         "source_names": ["Example Source"],
-        "confidence": "High" if reliability_label == "High" else "Medium",
+        "confidence": confidence or ("High" if reliability_label == "High" else "Medium"),
         "reliability_score": 90 if reliability_label == "High" else 70,
         "reliability_label": reliability_label,
         "summary": "Operator summary.",
@@ -99,6 +103,9 @@ def operator_story(
         "generic_repo_cap_exempt": generic_repo_cap_exempt,
         "watchlist_matches": watchlist_matches or [],
         "topic_key": topic_key,
+        "signal_quality": signal_quality,
+        "low_signal_announcement": low_signal_announcement,
+        "material_operator_signal": material_operator_signal,
     }
 
 
@@ -196,6 +203,8 @@ class FormatterTests(unittest.TestCase):
                     "canonical_url": "https://example.com/specific",
                     "source_names": ["CMS Newsroom"],
                     "confidence": "High",
+                    "signal_quality": "strong",
+                    "material_operator_signal": True,
                     "summary": "Primary source summary. Extra summary noise.",
                     "why_it_matters": "Prior-auth managers should adjust backlog scope this week. Extra why noise.",
                     "action_suggestion": "Audit backlog, trading-partner, and control gaps in prior auth this week.",
@@ -393,6 +402,35 @@ class FormatterTests(unittest.TestCase):
 
         self.assertEqual(len(selected), 1)
         self.assertEqual(selected[0]["story_id"], "first")
+
+    def test_rendered_confidence_is_capped_for_low_signal_story(self) -> None:
+        weak_story = operator_story(
+            "weak-readable",
+            "Readable but weak funding announcement",
+            category="News",
+            story_score=55.0,
+            confidence="High",
+            operator_relevance="low",
+            actionability="low",
+            workflow_wedges=["interoperability"],
+            matched_themes=["healthcare_ai_pm"],
+            signal_quality="weak",
+            low_signal_announcement=True,
+            material_operator_signal=False,
+        )
+        brief = {
+            "summary": {"raw_item_count": 1, "story_count": 1, "story_card_count": 1},
+            "story_cards": [weak_story],
+            "stories": [weak_story],
+        }
+
+        daily_html = format_operator_brief_html(brief, story_limit=4)
+        weekly_html = format_operator_brief_html(brief, mode="weekly")
+
+        self.assertIn("No strong signal today from 1 screened item.", daily_html)
+        self.assertNotIn("Confidence: High", daily_html)
+        self.assertNotIn("Confidence: Medium", daily_html)
+        self.assertIn("Confidence:</strong> Low", weekly_html)
 
     def test_no_quality_regulatory_items_avoid_empty_section_noise(self) -> None:
         html = format_digest_html(
@@ -1073,6 +1111,204 @@ class PersonalizationScoringTests(unittest.TestCase):
             1,
         )
 
+
+class SignalQualityGateTests(unittest.TestCase):
+    def weak_kidney_challenge_item(self, item_key: str = "news::kidneyx") -> dict[str, object]:
+        now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
+        return {
+            "category": "News",
+            "title": "HHS launches $4M KidneyX challenge",
+            "url": "https://www.healthcareitnews.com/news/hhs-launches-4m-kidneyx-challenge",
+            "raw_text": (
+                "HHS launched the KidneyX Empower Prize Challenge, awarding $4 million "
+                "for innovations that improve care coordination and research for kidney disease "
+                "and transplantation."
+            ),
+            "item_key": item_key,
+            "published_at": now - timedelta(hours=4),
+            "source": "Healthcare IT News",
+        }
+
+    def summarize_with_generic_boilerplate(self, items: list[dict[str, object]]) -> list[dict[str, object]]:
+        response = type(
+            "Response",
+            (),
+            {
+                "output_text": (
+                    '{"summary":"HHS launched a funding challenge for kidney disease innovation. '
+                    'The program may support care coordination research.",'
+                    '"why_it_matters":"Integration leads and health IT owners should use the next backlog review '
+                    'to inventory FHIR/API dependencies and brittle handoffs on active roadmap work in interoperability and data exchange.",'
+                    '"signal":"medium"}'
+                )
+            },
+        )()
+        with patch("summarize.client.responses.create", return_value=response):
+            return summarize_items(items)
+
+    def test_weak_challenge_story_does_not_become_only_daily_lead(self) -> None:
+        now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
+        scored = attach_priority_scores(
+            [self.weak_kidney_challenge_item()],
+            {"version": 1, "events": []},
+            now=now,
+        )
+
+        self.assertTrue(scored[0]["low_signal_announcement"])
+        self.assertEqual(scored[0]["operator_relevance"], "low")
+        self.assertEqual(scored[0]["near_term_actionability"], "low")
+
+        summarized = self.summarize_with_generic_boilerplate(scored)
+        brief = build_operator_brief_artifact(
+            summarized,
+            memory={"version": 2, "events": [], "daily_briefs": []},
+            memory_snapshot={},
+        )
+        html = format_operator_brief_html(brief)
+
+        self.assertEqual(brief["summary"]["story_card_count"], 0)
+        self.assertEqual(select_daily_stories(brief), [])
+        self.assertIn("No strong signal today from 1 screened item.", html)
+        self.assertNotIn("HHS launches $4M KidneyX challenge", html)
+        self.assertEqual(brief["stories"][0]["confidence"], "Low")
+
+    def test_all_weak_candidates_render_no_strong_signal_outcome(self) -> None:
+        now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
+        weak_items = [
+            self.weak_kidney_challenge_item("news::kidneyx"),
+            {
+                **self.weak_kidney_challenge_item("news::rural-grant"),
+                "title": "Foundation announces rural AI innovation grant program",
+                "url": "https://www.healthcareitnews.com/news/rural-ai-grant-program",
+                "raw_text": "A foundation announced a grant program for healthcare AI innovation and patient care research.",
+            },
+            {
+                **self.weak_kidney_challenge_item("news::care-coordination-prize"),
+                "title": "Digital health group opens care coordination prize competition",
+                "url": "https://www.healthcareitnews.com/news/care-coordination-prize",
+                "raw_text": "The prize competition seeks ideas for care coordination and healthcare data exchange research.",
+            },
+        ]
+        scored = attach_priority_scores(weak_items, {"version": 1, "events": []}, now=now)
+        summarized = self.summarize_with_generic_boilerplate(scored)
+        brief = build_operator_brief_artifact(
+            summarized,
+            memory={"version": 2, "events": [], "daily_briefs": []},
+            memory_snapshot={},
+        )
+        html = format_operator_brief_html(brief)
+
+        self.assertEqual(brief["summary"]["story_card_count"], 0)
+        self.assertEqual(select_daily_stories(brief), [])
+        self.assertIn("No strong signal today from 3 screened items.", html)
+        self.assertNotIn("<strong>Summary:</strong>", html)
+
+    def test_real_bad_output_fixtures_do_not_surface(self) -> None:
+        now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
+        real_bad_items = [
+            self.weak_kidney_challenge_item("news::kidneyx"),
+            {
+                "category": "News",
+                "title": "CMS announces 150 participants for upcoming ACCESS model launch",
+                "url": "https://www.healthcareitnews.com/news/cms-announces-150-participants-upcoming-access-model-launch",
+                "raw_text": (
+                    "CMS announces 150 participants for upcoming ACCESS model launch. "
+                    "The Centers for Medicare and Medicaid Services accepted 150 applicants "
+                    "to join the Advancing Chronic Care with Effective, Scalable Solutions program, "
+                    "which aligns Medicare payments with measurable health outcomes."
+                ),
+                "item_key": "news::cms-access",
+                "published_at": now - timedelta(hours=6),
+                "source": "Healthcare IT News",
+            },
+            {
+                "category": "News",
+                "title": "Exclusive: Redesign Health-backed Starfire launches to help pharma commercialize therapies",
+                "url": "https://www.mobihealthnews.com/news/exclusive-redesign-health-backed-starfire-launches-help-pharma-commercialize-therapies",
+                "raw_text": (
+                    "Starfire, a company offering an agentic commercial intelligence platform "
+                    "for life science companies, is launching with backing from Redesign Health."
+                ),
+                "item_key": "news::starfire",
+                "published_at": now - timedelta(hours=5),
+                "source": "MobiHealthNews",
+            },
+        ]
+
+        scored = attach_priority_scores(real_bad_items, {"version": 1, "events": []}, now=now)
+        summarized = self.summarize_with_generic_boilerplate(scored)
+        brief = build_operator_brief_artifact(
+            summarized,
+            memory={"version": 2, "events": [], "daily_briefs": []},
+            memory_snapshot={},
+        )
+        html = format_operator_brief_html(brief)
+
+        self.assertEqual(brief["summary"]["story_card_count"], 0)
+        self.assertEqual(select_daily_stories(brief), [])
+        self.assertIn("No strong signal today from 3 screened items.", html)
+        self.assertTrue(all(story["confidence"] == "Low" for story in brief["stories"]))
+        self.assertTrue(all(story["signal_quality"] == "weak" for story in brief["stories"]))
+        self.assertTrue(all(story["selection_penalties"] for story in brief["stories"]))
+
+    def test_strong_healthcare_policy_story_still_passes(self) -> None:
+        now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
+        item = {
+            "category": "Regulatory",
+            "title": "CMS final rule requires prior authorization API status updates",
+            "url": "https://www.cms.gov/newsroom/fact-sheets/prior-auth-api-final-rule",
+            "raw_text": (
+                "CMS issued a final rule requiring health plans to implement FHIR APIs for prior authorization "
+                "status, claims attachments, compliance dates, and electronic exchange."
+            ),
+            "item_key": "reg::prior-auth-api-final-rule",
+            "published_at": now - timedelta(hours=2),
+            "source": "CMS Newsroom",
+            "organization": "CMS",
+            "subcategory": "interoperability",
+            "topic_key": "prior_authorization",
+        }
+        scored = attach_priority_scores([item], {"version": 1, "events": []}, now=now)
+        response = type(
+            "Response",
+            (),
+            {
+                "output_text": (
+                    '{"summary":"CMS finalized prior authorization API and claims attachment requirements. '
+                    'The rule creates concrete integration work for payer and provider teams.",'
+                    '"why_it_matters":"Prior auth managers and integration leads should map FHIR status, claims attachment, and compliance gaps before the next roadmap check-in.",'
+                    '"signal":"high"}'
+                )
+            },
+        )()
+
+        with patch("summarize.client.responses.create", return_value=response):
+            summarized = summarize_items(scored)
+        brief = build_operator_brief_artifact(
+            summarized,
+            memory={"version": 2, "events": [], "daily_briefs": []},
+            memory_snapshot={},
+        )
+
+        self.assertEqual(brief["summary"]["story_card_count"], 1)
+        self.assertEqual(select_daily_stories(brief)[0]["cluster_title"], item["title"])
+        self.assertEqual(brief["story_cards"][0]["confidence"], "High")
+
+    def test_generic_why_it_matters_boilerplate_is_not_used_for_weak_story(self) -> None:
+        now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
+        scored = attach_priority_scores(
+            [self.weak_kidney_challenge_item()],
+            {"version": 1, "events": []},
+            now=now,
+        )
+        summarized = self.summarize_with_generic_boilerplate(scored)
+        why = summarized[0]["why_it_matters"]
+
+        self.assertEqual(summarized[0]["signal"], "low")
+        self.assertNotIn("inventory FHIR/API dependencies", why)
+        self.assertNotIn("integration leads and health IT owners", why)
+        self.assertIn("Do not assign roadmap or backlog time", why)
+
     def test_story_cards_filter_low_fit_repo_even_when_score_is_high(self) -> None:
         weak_repo = {
             "story_id": "weak-repo",
@@ -1233,8 +1469,8 @@ class WhyItMattersTests(unittest.TestCase):
         )
         news_text = fallback_why_it_matters(
             {
-                **render_item("News", "Referral Launch"),
-                "raw_text": "New referral intake launch for routing, eligibility, and intake operations across provider groups.",
+                **render_item("News", "Referral Deployment"),
+                "raw_text": "Referral intake deployment for routing, eligibility, and intake operations across provider groups.",
                 "workflow_wedges": ["referral/intake"],
             }
         )
@@ -1318,8 +1554,8 @@ class WhyItMattersTests(unittest.TestCase):
                 "workflow_wedges": ["prior auth"],
             },
             {
-                **render_item("News", "Referral Launch"),
-                "raw_text": "Referral intake launch for routing and eligibility operations.",
+                **render_item("News", "Referral Deployment"),
+                "raw_text": "Referral intake deployment for routing and eligibility operations across provider groups.",
                 "workflow_wedges": ["referral/intake"],
             },
             {

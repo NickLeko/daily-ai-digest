@@ -11,6 +11,7 @@ from config import (
     TRACKED_ENTITY_RULES,
 )
 from memory import DigestMemory, build_history_context
+from signal_quality import classify_operator_materiality
 
 
 DigestItem = Dict[str, Any]
@@ -564,8 +565,12 @@ def operator_relevance_level(
     text: str,
     theme_hits: Dict[str, List[str]],
     wedge_hits: Dict[str, List[str]],
+    materiality: Dict[str, Any],
 ) -> str:
     if item.get("category") == "Repo" and not wedge_hits and not repo_has_strong_healthcare_anchor(text):
+        return "low"
+
+    if materiality.get("low_signal_announcement"):
         return "low"
 
     operator_hits = matched_keywords(BUYER_OPERATOR_KEYWORDS, text)
@@ -585,11 +590,15 @@ def actionability_level(
     *,
     text: str,
     wedge_hits: Dict[str, List[str]],
+    materiality: Dict[str, Any],
 ) -> str:
+    if materiality.get("low_signal_announcement"):
+        return "low"
+
     action_hits = matched_keywords(ACTIONABILITY_KEYWORDS, text)
     if item.get("category") == "Regulatory":
         return "high"
-    if wedge_hits and action_hits:
+    if wedge_hits and action_hits and materiality.get("material_operator_signal"):
         return "high"
     if wedge_hits or action_hits:
         return "medium"
@@ -667,6 +676,10 @@ def build_item_profile(
         explicit_healthcare_context = repo_has_strong_healthcare_anchor(text)
     else:
         explicit_healthcare_context = has_explicit_healthcare_context(text)
+    materiality = classify_operator_materiality(
+        text,
+        category=str(item.get("category", "") or ""),
+    )
     interoperability_hits = matched_keywords(INTEROPERABILITY_REIMBURSEMENT_KEYWORDS, text)
     generic_devtool = is_generic_devtool_item(
         item,
@@ -692,11 +705,13 @@ def build_item_profile(
             text=text,
             theme_hits=theme_hits,
             wedge_hits=wedge_hits,
+            materiality=materiality,
         ),
         "near_term_actionability": actionability_level(
             item,
             text=text,
             wedge_hits=wedge_hits,
+            materiality=materiality,
         ),
         "explicit_interoperability_reimbursement": bool(interoperability_hits),
         "is_generic_devtool": generic_devtool,
@@ -707,7 +722,30 @@ def build_item_profile(
             text=text,
             wedge_hits=wedge_hits,
         ),
+        "signal_quality": materiality["signal_quality"],
+        "low_signal_announcement": bool(materiality["low_signal_announcement"]),
+        "soft_funding_or_challenge": bool(materiality["soft_funding_or_challenge"]),
+        "material_operator_signal": bool(materiality["material_operator_signal"]),
+        "materiality_signals": materiality["materiality_signals"],
+        "materiality_reason": materiality["materiality_reason"],
     }
+
+
+def selection_penalties_for_profile(item_profile: Dict[str, Any]) -> List[str]:
+    penalties: List[str] = []
+    if item_profile.get("low_signal_announcement"):
+        if item_profile.get("soft_funding_or_challenge"):
+            penalties.append("soft_funding_challenge_demoted")
+        else:
+            penalties.append("soft_announcement_demoted")
+        penalties.append("weak_materiality_confidence_cap")
+    if item_profile.get("is_generic_devtool") and not item_profile.get("generic_repo_cap_exempt"):
+        penalties.append("generic_devtool_score_penalty")
+    if item_profile.get("is_coding_agent_tool"):
+        penalties.append("coding_agent_tooling_score_penalty")
+    if item_profile.get("is_speculative_low_roi"):
+        penalties.append("speculative_low_roi_score_penalty")
+    return penalties
 
 
 def clamp_score(value: float) -> float:
@@ -853,6 +891,14 @@ def compute_dimension_scores(
         scores["content_potential"] -= 0.7
         scores["side_hustle_relevance"] -= 1.0
 
+    if item_profile.get("low_signal_announcement"):
+        penalty = 1.9 if item_profile.get("soft_funding_or_challenge") else 1.4
+        scores["career_relevance"] -= penalty
+        scores["build_relevance"] -= penalty
+        scores["content_potential"] -= 0.9
+        scores["regulatory_significance"] -= 0.9
+        scores["side_hustle_relevance"] -= 0.8
+
     scores["timeliness"] = timeliness_score(item, now=now)
     scores["novelty"] = novelty_score(history_context)
     scores["theme_momentum"] = theme_momentum_score(history_context)
@@ -933,6 +979,13 @@ def score_item(
         "is_generic_devtool": bool(item_profile.get("is_generic_devtool")),
         "generic_repo_cap_exempt": bool(item_profile.get("generic_repo_cap_exempt")),
         "is_speculative_low_roi": bool(item_profile.get("is_speculative_low_roi")),
+        "signal_quality": str(item_profile.get("signal_quality", "medium") or "medium"),
+        "low_signal_announcement": bool(item_profile.get("low_signal_announcement")),
+        "soft_funding_or_challenge": bool(item_profile.get("soft_funding_or_challenge")),
+        "material_operator_signal": bool(item_profile.get("material_operator_signal")),
+        "materiality_signals": item_profile.get("materiality_signals", []),
+        "materiality_reason": str(item_profile.get("materiality_reason", "") or ""),
+        "selection_penalties": selection_penalties_for_profile(item_profile),
         "score_dimensions": dimension_scores,
         "objective_scores": objective_scores,
         "priority_score": priority_score(dimension_scores),

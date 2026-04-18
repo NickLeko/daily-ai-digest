@@ -2,6 +2,7 @@ from html import escape
 import re
 from typing import Dict, List
 
+from signal_quality import classify_mapping_materiality
 from state import local_now
 
 
@@ -48,6 +49,8 @@ DAILY_STORY_LIMIT = 4
 DAILY_MIN_STORY_COUNT = 3
 DAILY_BACKFILL_MIN_STORY_SCORE = 24.0
 DAILY_BACKFILL_MIN_OBJECTIVE_SCORE = 5.8
+DAILY_SINGLE_STORY_MIN_STORY_SCORE = 32.0
+DAILY_SINGLE_STORY_MIN_OBJECTIVE_SCORE = 6.4
 
 DAILY_TARGET_THEME_KEYS = {
     "healthcare_ai_pm",
@@ -556,7 +559,13 @@ def story_source_names(story: Dict[str, object]) -> List[str]:
 
 
 def story_confidence_label(story: Dict[str, object]) -> str:
-    return compact_text(story.get("confidence") or story.get("reliability_label") or "Medium")
+    label = compact_text(story.get("confidence") or story.get("reliability_label") or "Medium")
+    signal_quality = story_signal_quality_for_render(story)
+    if story_is_low_signal_for_render(story) or signal_quality == "weak":
+        return "Low"
+    if signal_quality == "medium" and label == "High":
+        return "Medium"
+    return label
 
 
 def story_source_confidence_line(story: Dict[str, object]) -> str:
@@ -645,6 +654,8 @@ def daily_backfill_has_target_fit(story: Dict[str, object]) -> bool:
 
     if bool(story.get("docs_only_repo")):
         return False
+    if story_is_low_signal_for_render(story) or story_signal_quality_for_render(story) == "weak":
+        return False
 
     if category == "Regulatory":
         regulatory_score = story_objective_score(story, "regulatory")
@@ -705,6 +716,63 @@ def daily_backfill_story_is_worthy(story: Dict[str, object]) -> bool:
     )
 
 
+def story_materiality_for_render(story: Dict[str, object]) -> Dict[str, object]:
+    return classify_mapping_materiality(story)
+
+
+def story_is_low_signal_for_render(story: Dict[str, object]) -> bool:
+    if "low_signal_announcement" in story:
+        return bool(story.get("low_signal_announcement"))
+    return bool(story_materiality_for_render(story)["low_signal_announcement"])
+
+
+def story_has_material_signal_for_render(story: Dict[str, object]) -> bool:
+    if "material_operator_signal" in story:
+        return bool(story.get("material_operator_signal"))
+    return bool(story_materiality_for_render(story)["material_operator_signal"])
+
+
+def story_signal_quality_for_render(story: Dict[str, object]) -> str:
+    explicit = compact_text(story.get("signal_quality")).lower()
+    if explicit in {"strong", "medium", "weak"}:
+        return explicit
+    return compact_text(story_materiality_for_render(story)["signal_quality"]).lower()
+
+
+def daily_story_passes_render_quality(story: Dict[str, object]) -> bool:
+    return not story_is_low_signal_for_render(story) and story_signal_quality_for_render(story) != "weak"
+
+
+def single_daily_story_is_worthy(story: Dict[str, object]) -> bool:
+    if not daily_story_passes_render_quality(story):
+        return False
+
+    story_score = story_float(story, "story_score", story_float(story, "priority_score"))
+    max_objective = max_story_objective_score_for_render(story)
+    actionability = compact_text(story.get("near_term_actionability") or "low").lower()
+    support_count = story_int(story, "supporting_item_count", 1)
+    has_score_evidence = (
+        "story_score" in story
+        or "priority_score" in story
+        or bool(story.get("objective_scores"))
+    )
+
+    if story_has_material_signal_for_render(story):
+        if not has_score_evidence:
+            return True
+        return (
+            story_score >= DAILY_SINGLE_STORY_MIN_STORY_SCORE
+            or max_objective >= DAILY_SINGLE_STORY_MIN_OBJECTIVE_SCORE
+            or support_count >= 2
+        )
+
+    return (
+        story_score >= DAILY_SINGLE_STORY_MIN_STORY_SCORE
+        and max_objective >= DAILY_SINGLE_STORY_MIN_OBJECTIVE_SCORE
+        and actionability == "high"
+    )
+
+
 def daily_backfill_rank(story: Dict[str, object]) -> tuple[float, float, int, int, str]:
     return (
         story_float(story, "story_score", story_float(story, "priority_score")),
@@ -753,6 +821,8 @@ def select_daily_stories(
     selected: List[Dict[str, object]] = []
     seen: set[str] = set()
     for story in candidates:
+        if not daily_story_passes_render_quality(story):
+            continue
         append_daily_story(story, selected, seen)
         if len(selected) >= story_limit:
             break
@@ -771,6 +841,9 @@ def select_daily_stories(
             append_daily_story(story, selected, seen)
             if len(selected) >= backfill_target:
                 break
+
+    if len(selected) == 1 and not single_daily_story_is_worthy(selected[0]):
+        return []
 
     return selected
 
@@ -798,6 +871,8 @@ def build_daily_story_header(
         if count
     ]
     screened_label = singular_plural(screened_count, "screened item")
+    if not stories:
+        return f"No strong signal today from {screened_label}."
     if len(category_parts) == 1:
         category = next(category for category, count in counts.items() if count)
         category_story_label = {
@@ -820,7 +895,7 @@ def build_daily_story_header(
 def render_daily_headlines(stories: List[Dict[str, object]]) -> str:
     if not stories:
         return """
-        <p style="margin: 8px 0 14px 0; color:#555;">No surfaced stories today.</p>
+        <p style="margin: 8px 0 14px 0; color:#555;">No operator-grade stories cleared today's quality bar.</p>
         """
     if len(stories) == 1:
         return ""
@@ -905,7 +980,7 @@ def render_weekly_story_cards(stories: List[Dict[str, object]] | None) -> str:
               </p>
               <p style="margin: 0 0 8px 0; color:#444;">
                 <strong>Supporting sources:</strong> {supporting_sources or 'None'}.
-                <strong>Confidence:</strong> {escaped(story.get('confidence', 'Medium'))}.
+                <strong>Confidence:</strong> {escaped(story_confidence_label(story))}.
               </p>
               <p style="margin: 0 0 8px 0;">{escaped(story.get('summary', ''))}</p>
               <p style="margin: 0 0 8px 0; color: #444;"><strong>Why it matters:</strong> {escaped(story.get('why_it_matters', ''))}</p>
