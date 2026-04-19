@@ -25,11 +25,13 @@ from formatter import (
     format_digest_html,
     format_operator_brief_html,
     select_daily_stories,
+    select_daily_stories_with_diagnostics,
     sentence_limited,
 )
 from memory import build_memory_snapshot
 from operator_brief import build_operator_brief_artifact, select_story_cards, story_is_surface_worthy
 from scoring import attach_priority_scores, build_top_picks
+from selection_audit import build_selection_diagnostics
 from summarize import (
     fallback_digest_strategy,
     fallback_why_it_matters,
@@ -1146,6 +1148,50 @@ class SignalQualityGateTests(unittest.TestCase):
         with patch("summarize.client.responses.create", return_value=response):
             return summarize_items(items)
 
+    def decent_near_miss_item(
+        self,
+        item_key: str,
+        title: str,
+        *,
+        priority_score: float,
+        summary: str,
+    ) -> dict[str, object]:
+        now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
+        return {
+            "category": "News",
+            "title": title,
+            "url": f"https://example.com/{item_key}",
+            "raw_text": summary,
+            "summary": summary,
+            "why_it_matters": (
+                "Integration leads and health IT owners should use the next backlog review "
+                "to inventory FHIR/API dependencies."
+            ),
+            "signal": "medium",
+            "item_key": item_key,
+            "published_at": now - timedelta(hours=2),
+            "source": "Regional Trade Journal",
+            "matched_themes": [],
+            "workflow_wedges": [],
+            "objective_scores": {"career": 4.9, "build": 5.1, "content": 5.0, "regulatory": 2.0},
+            "score_dimensions": {
+                "career_relevance": 3.0,
+                "build_relevance": 3.1,
+                "content_potential": 3.0,
+                "regulatory_significance": 1.0,
+                "side_hustle_relevance": 1.0,
+                "timeliness": 4.0,
+                "novelty": 3.0,
+                "theme_momentum": 1.0,
+            },
+            "priority_score": priority_score,
+            "operator_relevance": "medium",
+            "near_term_actionability": "medium",
+            "signal_quality": "medium",
+            "low_signal_announcement": False,
+            "material_operator_signal": True,
+        }
+
     def test_weak_challenge_story_does_not_become_only_daily_lead(self) -> None:
         now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
         scored = attach_priority_scores(
@@ -1172,6 +1218,196 @@ class SignalQualityGateTests(unittest.TestCase):
         self.assertNotIn("HHS launches $4M KidneyX challenge", html)
         self.assertEqual(brief["stories"][0]["confidence"], "Low")
 
+    def test_daily_selection_records_single_story_collapse_reason(self) -> None:
+        thin_story = operator_story(
+            "thin-single",
+            "Thin but readable workflow item",
+            story_score=25.0,
+            objective_scores={"career": 5.7, "build": 5.8, "content": 5.4, "regulatory": 3.0},
+            operator_relevance="medium",
+            actionability="medium",
+            workflow_wedges=["prior auth"],
+            signal_quality="strong",
+            material_operator_signal=True,
+        )
+        brief = {
+            "summary": {"raw_item_count": 1, "story_count": 1, "story_card_count": 1},
+            "story_cards": [thin_story],
+            "stories": [thin_story],
+        }
+
+        result = select_daily_stories_with_diagnostics(brief, story_limit=4)
+
+        self.assertEqual(result["stories"], [])
+        self.assertEqual(
+            result["collapse_reason"]["code"],
+            "single_story_failed_stricter_gate",
+        )
+
+    def test_daily_selection_records_render_quality_collapse_reason(self) -> None:
+        weak_story = operator_story(
+            "weak-card",
+            "Weak card that should not render",
+            confidence="High",
+            signal_quality="weak",
+            low_signal_announcement=True,
+            material_operator_signal=False,
+        )
+        brief = {
+            "summary": {"raw_item_count": 1, "story_count": 1, "story_card_count": 1},
+            "story_cards": [weak_story],
+            "stories": [weak_story],
+        }
+
+        result = select_daily_stories_with_diagnostics(brief, story_limit=4)
+
+        self.assertEqual(result["stories"], [])
+        self.assertEqual(
+            result["collapse_reason"]["code"],
+            "story_cards_failed_render_quality",
+        )
+
+    def test_no_signal_day_renders_best_near_misses_without_promoting_them(self) -> None:
+        near_miss_items = [
+            self.decent_near_miss_item(
+                "news::referral-pilot",
+                "Regional health system pilots referral intake assistant",
+                priority_score=21.0,
+                summary="A regional health system described a referral intake assistant pilot without reported deployment outcomes.",
+            ),
+            self.decent_near_miss_item(
+                "news::patient-access-routing",
+                "Vendor reports patient access routing pilot",
+                priority_score=19.0,
+                summary="A vendor described patient access routing work without independent customer results.",
+            ),
+            self.decent_near_miss_item(
+                "news::denials-queue",
+                "Payer tests denials queue summarization",
+                priority_score=17.0,
+                summary="A payer test covered denials queue summarization without measured operational impact.",
+            ),
+            self.decent_near_miss_item(
+                "news::scheduling-inbox",
+                "Hospital group demos scheduling inbox assistant",
+                priority_score=15.0,
+                summary="A hospital group demoed scheduling inbox assistance without implementation details.",
+            ),
+        ]
+        brief = build_operator_brief_artifact(
+            near_miss_items,
+            memory={"version": 2, "events": [], "daily_briefs": []},
+            memory_snapshot={},
+        )
+        html = format_operator_brief_html(brief)
+
+        self.assertEqual(brief["summary"]["story_card_count"], 0)
+        self.assertEqual(select_daily_stories(brief), [])
+        self.assertEqual(len(brief["near_miss_items"]), 3)
+        self.assertIn("No strong signal today from 4 screened items.", html)
+        self.assertIn("No operator-grade stories cleared today's quality bar.", html)
+        self.assertLess(
+            html.index("No strong signal today"),
+            html.index("WORTH A QUICK GLANCE"),
+        )
+        self.assertEqual(html.count("Did not clear the bar because"), 3)
+        self.assertIn("Regional health system pilots referral intake assistant", html)
+        self.assertIn("without reported deployment outcomes", html)
+        self.assertIn("score and objective evidence stayed below the operator-grade threshold", html)
+        self.assertNotIn("Hospital group demos scheduling inbox assistant", html)
+        self.assertNotIn("Integration leads", html)
+        self.assertNotIn("health IT owners", html)
+        self.assertNotIn("backlog review", html)
+        self.assertNotIn("FHIR/API dependencies", html)
+
+    def test_realistic_daily_path_selects_policy_story_and_keeps_filler_out(self) -> None:
+        now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
+        items = [
+            {
+                "category": "Regulatory",
+                "title": "CMS final rule requires prior authorization API status updates",
+                "url": "https://www.cms.gov/newsroom/fact-sheets/prior-auth-api-final-rule",
+                "raw_text": (
+                    "CMS issued a final rule requiring health plans to implement FHIR APIs for prior authorization "
+                    "status, claims attachments, compliance dates, and electronic exchange."
+                ),
+                "summary": "CMS finalized prior authorization API and claims attachment requirements.",
+                "why_it_matters": (
+                    "Prior auth managers and integration leads should map FHIR status, claims attachment, "
+                    "and compliance gaps before the next roadmap check-in."
+                ),
+                "signal": "high",
+                "item_key": "reg::prior-auth-api-final-rule",
+                "published_at": now - timedelta(hours=2),
+                "source": "CMS Newsroom",
+                "organization": "CMS",
+                "subcategory": "interoperability",
+                "topic_key": "prior_authorization",
+                "matched_themes": ["healthcare_admin_automation"],
+                "workflow_wedges": ["prior auth", "interoperability"],
+                "objective_scores": {"career": 7.2, "build": 7.1, "content": 6.1, "regulatory": 9.0},
+                "score_dimensions": {
+                    "career_relevance": 4.4,
+                    "build_relevance": 4.5,
+                    "content_potential": 3.8,
+                    "regulatory_significance": 5.0,
+                    "side_hustle_relevance": 2.0,
+                    "timeliness": 5.0,
+                    "novelty": 5.0,
+                    "theme_momentum": 2.5,
+                },
+                "priority_score": 40.0,
+                "operator_relevance": "high",
+                "near_term_actionability": "high",
+                "signal_quality": "strong",
+                "low_signal_announcement": False,
+                "material_operator_signal": True,
+            },
+            {
+                **self.weak_kidney_challenge_item("news::kidneyx"),
+                "summary": "HHS launched a funding challenge for kidney disease innovation.",
+                "why_it_matters": "Do not assign roadmap or backlog time without concrete deployment evidence.",
+                "signal": "low",
+                "priority_score": 11.0,
+                "objective_scores": {"career": 3.2, "build": 2.4, "content": 3.0, "regulatory": 1.5},
+                "score_dimensions": {},
+                "signal_quality": "weak",
+                "low_signal_announcement": True,
+                "soft_funding_or_challenge": True,
+                "material_operator_signal": False,
+                "selection_penalties": ["soft_funding_challenge_demoted"],
+            },
+            self.decent_near_miss_item(
+                "news::referral-pilot-full-path",
+                "Regional health system pilots referral intake assistant",
+                priority_score=21.0,
+                summary="A regional health system described a referral intake assistant pilot without reported deployment outcomes.",
+            ),
+        ]
+        brief = build_operator_brief_artifact(
+            items,
+            memory={"version": 2, "events": [], "daily_briefs": []},
+            memory_snapshot={},
+        )
+        diagnostics = build_selection_diagnostics(brief, mode="daily")
+        html = format_operator_brief_html(brief)
+        selected_titles = [story["cluster_title"] for story in select_daily_stories(brief)]
+
+        self.assertEqual(selected_titles, ["CMS final rule requires prior authorization API status updates"])
+        self.assertFalse(diagnostics["no_signal_fallback"]["triggered"])
+        self.assertFalse(diagnostics["daily_selection"]["collapse_reason"]["triggered"])
+        self.assertIn("CMS final rule requires prior authorization API status updates", html)
+        self.assertNotIn("HHS launches $4M KidneyX challenge", html)
+        self.assertEqual(brief["story_cards"][0]["confidence"], "High")
+        self.assertEqual(brief["story_cards"][0]["confidence_display"], "High")
+        self.assertEqual(brief["story_cards"][0]["confidence_override_reason"], "")
+        self.assertTrue(
+            any(
+                item["title"] == "Regional health system pilots referral intake assistant"
+                for item in brief["near_miss_items"]
+            )
+        )
+
     def test_all_weak_candidates_render_no_strong_signal_outcome(self) -> None:
         now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
         weak_items = [
@@ -1197,11 +1433,17 @@ class SignalQualityGateTests(unittest.TestCase):
             memory_snapshot={},
         )
         html = format_operator_brief_html(brief)
+        diagnostics = build_selection_diagnostics(brief, mode="daily")
 
         self.assertEqual(brief["summary"]["story_card_count"], 0)
         self.assertEqual(select_daily_stories(brief), [])
         self.assertIn("No strong signal today from 3 screened items.", html)
         self.assertNotIn("<strong>Summary:</strong>", html)
+        self.assertNotIn("WORTH A QUICK GLANCE", html)
+        self.assertEqual(
+            diagnostics["no_signal_fallback"]["reason_code"],
+            "no_story_cards_passed_admission",
+        )
 
     def test_real_bad_output_fixtures_do_not_surface(self) -> None:
         now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
@@ -1289,10 +1531,12 @@ class SignalQualityGateTests(unittest.TestCase):
             memory={"version": 2, "events": [], "daily_briefs": []},
             memory_snapshot={},
         )
+        html = format_operator_brief_html(brief)
 
         self.assertEqual(brief["summary"]["story_card_count"], 1)
         self.assertEqual(select_daily_stories(brief)[0]["cluster_title"], item["title"])
         self.assertEqual(brief["story_cards"][0]["confidence"], "High")
+        self.assertNotIn("WORTH A QUICK GLANCE", html)
 
     def test_generic_why_it_matters_boilerplate_is_not_used_for_weak_story(self) -> None:
         now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)

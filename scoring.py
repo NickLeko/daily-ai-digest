@@ -11,6 +11,7 @@ from config import (
     TRACKED_ENTITY_RULES,
 )
 from memory import DigestMemory, build_history_context
+from selection_policy import ITEM_OBJECTIVE_MIN_SCORES
 from signal_quality import classify_operator_materiality
 
 
@@ -43,12 +44,7 @@ OBJECTIVE_EMPTY_MESSAGES = {
     "regulatory": "No high-signal regulatory item today.",
 }
 
-OBJECTIVE_MIN_SCORE = {
-    "career": 5.8,
-    "build": 6.0,
-    "content": 5.4,
-    "regulatory": 6.2,
-}
+OBJECTIVE_MIN_SCORE = ITEM_OBJECTIVE_MIN_SCORES
 
 OBJECTIVE_REUSE_MARGIN = {
     "career": 1.9,

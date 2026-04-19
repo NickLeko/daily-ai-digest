@@ -19,6 +19,17 @@ from config import (
 )
 from memory import DigestMemory, latest_previous_brief
 from scoring import OBJECTIVE_DISPLAY_ORDER
+from selection_policy import (
+    NEAR_MISS_LIMIT,
+    NEAR_MISS_MIN_OBJECTIVE_SCORE,
+    NEAR_MISS_MIN_REGULATORY_OBJECTIVE_SCORE,
+    NEAR_MISS_MIN_STORY_SCORE,
+    STORY_OBJECTIVE_MIN_SCORES,
+    STORY_STRONG_OBJECTIVE_SCORE,
+    STORY_STRONG_SCORE,
+    TARGET_THEME_KEYS,
+    confidence_display_for_story,
+)
 from signal_quality import classify_mapping_materiality
 from state import local_now
 from summarize import (
@@ -113,23 +124,21 @@ OBJECTIVE_EMPTY_MESSAGES = {
     "regulatory": "No high-signal regulatory item today.",
 }
 
-OBJECTIVE_MIN_SCORES = {
-    "career": 5.7,
-    "build": 5.9,
-    "content": 5.2,
-    "regulatory": 6.1,
-}
-
 QUALITY_WARNING_LIMIT = 5
-STORY_STRONG_SCORE = 28.0
-STORY_STRONG_OBJECTIVE_SCORE = 6.7
+OBJECTIVE_MIN_SCORES = STORY_OBJECTIVE_MIN_SCORES
 
-STORY_TARGET_THEME_KEYS = {
-    "healthcare_ai_pm",
-    "healthcare_admin_automation",
-    "low_reg_friction_wedges",
-    "llm_eval_rag_governance_safety",
+NEAR_MISS_BLOCKED_SUMMARY_PHRASES = {
+    "integration leads should",
+    "health it owners should",
+    "backlog review",
+    "fhir/api dependencies",
+    "fhir api dependencies",
+    "operator implication",
+    "operator planning",
+    "roadmap time",
+    "why it matters",
 }
+
 RECALL_ENFORCEMENT_TOPIC_KEY = "recall_enforcement"
 
 NO_STRONG_SIGNAL_OPERATOR_MOVES = {
@@ -596,6 +605,7 @@ def normalize_item(
         "signature_tokens": unique(signature)[:10],
         "_item": item,
     }
+    normalized_item.update(confidence_display_for_story(normalized_item))
     return normalized_item
 
 
@@ -1045,6 +1055,7 @@ def build_stories(
             "_lead_item": lead_item,
             "_items": cluster,
         }
+        story.update(confidence_display_for_story(story))
         if cluster_low_signal_announcement:
             for objective in OBJECTIVE_DISPLAY_ORDER:
                 story["objective_scores"][objective] = round(
@@ -1531,7 +1542,7 @@ def recall_enforcement_has_primary_slot_signal(story: Dict[str, Any]) -> bool:
         or bool(workflow_wedges)
         or support_count >= 2
         or bool(story.get("watchlist_matches"))
-        or bool(matched_themes & STORY_TARGET_THEME_KEYS)
+        or bool(matched_themes & TARGET_THEME_KEYS)
     )
 
 
@@ -1580,7 +1591,7 @@ def story_has_target_fit(story: Dict[str, Any]) -> bool:
             and (
                 bool(workflow_wedges)
                 or actionability in {"high", "medium"}
-                or bool(matched_themes & STORY_TARGET_THEME_KEYS)
+                or bool(matched_themes & TARGET_THEME_KEYS)
             )
         )
 
@@ -1630,6 +1641,166 @@ def story_surface_worthiness_reason(story: Dict[str, Any]) -> str:
 
 def story_is_surface_worthy(story: Dict[str, Any]) -> bool:
     return story_surface_worthiness(story)[0]
+
+
+def compact_one_line(value: object, *, max_length: int = 220) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+
+    sentence_match = re.search(r"^(.+?[.!?])(?:\s|$)", text)
+    line = sentence_match.group(1).strip() if sentence_match else text
+    if len(line) > max_length:
+        trimmed = line[: max_length - 1].rsplit(" ", 1)[0].strip()
+        line = f"{trimmed}." if trimmed else line[:max_length].strip()
+    if line and line[-1] not in ".!?":
+        line = f"{line}."
+    return line
+
+
+def near_miss_summary_is_clean(value: str) -> bool:
+    normalized = normalize_text(value)
+    if len(normalized.split()) < 5:
+        return False
+    if any(phrase in normalized for phrase in NEAR_MISS_BLOCKED_SUMMARY_PHRASES):
+        return False
+    if " should " in f" {normalized} ":
+        return False
+    return True
+
+
+def near_miss_summary_for_story(story: Dict[str, Any]) -> str:
+    lead_item = story.get("_lead_item", {}) if isinstance(story.get("_lead_item"), dict) else {}
+    raw_item = lead_item.get("_item", {}) if isinstance(lead_item.get("_item"), dict) else {}
+    candidates = [
+        story.get("summary", ""),
+        lead_item.get("summary", ""),
+        raw_item.get("summary", ""),
+        story.get("evidence", ""),
+        raw_item.get("raw_text", ""),
+    ]
+    for candidate in candidates:
+        line = compact_one_line(candidate)
+        if line and near_miss_summary_is_clean(line):
+            return line
+    return ""
+
+
+def near_miss_reason_for_story(story: Dict[str, Any], rejection_reason: str) -> str:
+    reason = str(rejection_reason or "").lower()
+    if "regulatory story score" in reason:
+        return "regulatory usefulness stayed below the operator-grade threshold"
+    if "recall/enforcement" in reason:
+        return "the recall/enforcement angle lacked a stronger workflow signal"
+    if "score/objective" in reason or "threshold" in reason:
+        return "score and objective evidence stayed below the operator-grade threshold"
+    if "corroborating support" in reason:
+        return "source support was too thin"
+    if "target-fit" in reason:
+        return "operator fit was too indirect"
+    return "evidence was not strong enough for the main digest"
+
+
+def story_has_near_miss_floor(story: Dict[str, Any]) -> bool:
+    if story_low_signal_announcement(story):
+        return False
+    if story_signal_quality_label(story) == "weak":
+        return False
+    if not story_has_target_fit(story):
+        return False
+    if story.get("reliability_label") == "Low" and int(story.get("supporting_item_count", 0) or 0) < 2:
+        return False
+
+    story_score = float(story.get("story_score", 0.0) or 0.0)
+    max_objective = max_story_objective_score(story)
+    support_count = int(story.get("supporting_item_count", 0) or 0)
+    actionability = str(story.get("near_term_actionability", "low") or "low")
+
+    if story.get("category") == "Regulatory":
+        regulatory_score = float((story.get("objective_scores", {}) or {}).get("regulatory", 0.0) or 0.0)
+        return (
+            story_score >= 12.0
+            or regulatory_score >= NEAR_MISS_MIN_REGULATORY_OBJECTIVE_SCORE
+            or support_count >= 2
+        )
+
+    return (
+        story_score >= NEAR_MISS_MIN_STORY_SCORE
+        or max_objective >= NEAR_MISS_MIN_OBJECTIVE_SCORE
+        or (support_count >= 2 and actionability in {"high", "medium"})
+    )
+
+
+def near_miss_rank(story: Dict[str, Any]) -> Tuple[float, float, int, int, str]:
+    story_score = float(story.get("story_score", 0.0) or 0.0)
+    max_objective = max_story_objective_score(story)
+    support_count = int(story.get("supporting_item_count", 0) or 0)
+    reliability_score = int(story.get("reliability_score", 0) or 0)
+    if story.get("category") == "Regulatory":
+        score_ratio = story_score / 18.0
+        objective_ratio = (
+            float((story.get("objective_scores", {}) or {}).get("regulatory", 0.0) or 0.0)
+            / OBJECTIVE_MIN_SCORES["regulatory"]
+        )
+    else:
+        score_ratio = story_score / STORY_STRONG_SCORE
+        objective_ratio = max_objective / STORY_STRONG_OBJECTIVE_SCORE
+    return (
+        max(score_ratio, objective_ratio) + min(support_count, 2) * 0.05,
+        story_score,
+        reliability_score,
+        support_count,
+        str(story.get("cluster_title", "") or ""),
+    )
+
+
+def build_near_miss_items(
+    stories: List[Dict[str, Any]],
+    *,
+    selected_stories: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    selected_story_ids = {
+        str(story.get("story_id", "") or "")
+        for story in selected_stories
+        if str(story.get("story_id", "") or "").strip()
+    }
+    candidates: List[Tuple[Tuple[float, float, int, int, str], Dict[str, Any]]] = []
+    for story in stories:
+        story_id = str(story.get("story_id", "") or "")
+        if story_id in selected_story_ids:
+            continue
+
+        surface_worthy, rejection_reason = story_surface_worthiness(story)
+        if surface_worthy or not story_has_near_miss_floor(story):
+            continue
+
+        summary = near_miss_summary_for_story(story)
+        if not summary:
+            continue
+
+        candidates.append(
+            (
+                near_miss_rank(story),
+                {
+                    "story_id": story_id,
+                    "title": str(story.get("cluster_title", "") or story.get("title", "") or "Untitled story"),
+                    "source": str(story.get("source", "") or ""),
+                    "summary": summary,
+                    "miss_reason": near_miss_reason_for_story(story, rejection_reason),
+                    "rejection_reason": rejection_reason,
+                    "story_score": round(float(story.get("story_score", 0.0) or 0.0), 2),
+                    "max_objective_score": round(max_story_objective_score(story), 2),
+                    "signal_quality": story_signal_quality_label(story),
+                },
+            )
+        )
+
+    ranked = sorted(
+        candidates,
+        key=lambda entry: (entry[0], entry[1]["title"]),
+        reverse=True,
+    )
+    return [item for _rank, item in ranked[:NEAR_MISS_LIMIT]]
 
 
 def repeated_sentence_shells(lines: List[str]) -> int:
@@ -1849,6 +2020,7 @@ def build_operator_brief_artifact(
             normalized_item["why_it_matters"] = parent_story["why_it_matters"]
 
     story_cards = select_story_cards(stories)
+    near_miss_items = build_near_miss_items(stories, selected_stories=story_cards)
     top_picks = build_story_top_picks(story_cards)
     thesis_tracker = build_thesis_tracker(stories, theses=theses, previous_brief=previous_brief)
     watchlist_hits = build_watchlist_hits(stories, previous_brief=previous_brief)
@@ -1886,6 +2058,7 @@ def build_operator_brief_artifact(
         "watchlist_hits": watchlist_hits,
         "quality_eval": quality_eval,
         "top_picks": top_picks,
+        "near_miss_items": near_miss_items,
         "stories": [serializable_story(story) for story in stories],
         "story_cards": [serializable_story(story) for story in story_cards],
         "items": [serializable_item(item) for item in normalized_items],

@@ -2,7 +2,20 @@ from html import escape
 import re
 from typing import Dict, List
 
-from signal_quality import classify_mapping_materiality
+from selection_policy import (
+    DAILY_BACKFILL_MIN_OBJECTIVE_SCORE,
+    DAILY_BACKFILL_MIN_STORY_SCORE,
+    DAILY_MIN_STORY_COUNT,
+    DAILY_SINGLE_STORY_MIN_OBJECTIVE_SCORE,
+    DAILY_SINGLE_STORY_MIN_STORY_SCORE,
+    DAILY_STORY_LIMIT,
+    NEAR_MISS_LIMIT,
+    TARGET_THEME_KEYS,
+    confidence_display_for_story,
+    story_has_material_signal_for_policy,
+    story_is_low_signal_for_policy,
+    story_signal_quality_for_policy,
+)
 from state import local_now
 
 
@@ -45,20 +58,6 @@ CHANGE_STYLES = {
 }
 
 SECTION_ORDER = ["Repo", "News", "Regulatory"]
-DAILY_STORY_LIMIT = 4
-DAILY_MIN_STORY_COUNT = 3
-DAILY_BACKFILL_MIN_STORY_SCORE = 24.0
-DAILY_BACKFILL_MIN_OBJECTIVE_SCORE = 5.8
-DAILY_SINGLE_STORY_MIN_STORY_SCORE = 32.0
-DAILY_SINGLE_STORY_MIN_OBJECTIVE_SCORE = 6.4
-
-DAILY_TARGET_THEME_KEYS = {
-    "healthcare_ai_pm",
-    "healthcare_admin_automation",
-    "low_reg_friction_wedges",
-    "llm_eval_rag_governance_safety",
-}
-
 ACTION_WORDS = {
     "audit",
     "check",
@@ -559,13 +558,10 @@ def story_source_names(story: Dict[str, object]) -> List[str]:
 
 
 def story_confidence_label(story: Dict[str, object]) -> str:
-    label = compact_text(story.get("confidence") or story.get("reliability_label") or "Medium")
-    signal_quality = story_signal_quality_for_render(story)
-    if story_is_low_signal_for_render(story) or signal_quality == "weak":
-        return "Low"
-    if signal_quality == "medium" and label == "High":
-        return "Medium"
-    return label
+    explicit_display = compact_text(story.get("confidence_display"))
+    if explicit_display:
+        return explicit_display
+    return confidence_display_for_story(story)["confidence_display"]
 
 
 def story_source_confidence_line(story: Dict[str, object]) -> str:
@@ -691,7 +687,7 @@ def daily_backfill_has_target_fit(story: Dict[str, object]) -> bool:
             and (
                 bool(workflow_wedges)
                 or actionability in {"high", "medium"}
-                or bool(matched_themes & DAILY_TARGET_THEME_KEYS)
+                or bool(matched_themes & TARGET_THEME_KEYS)
             )
         )
 
@@ -716,27 +712,16 @@ def daily_backfill_story_is_worthy(story: Dict[str, object]) -> bool:
     )
 
 
-def story_materiality_for_render(story: Dict[str, object]) -> Dict[str, object]:
-    return classify_mapping_materiality(story)
-
-
 def story_is_low_signal_for_render(story: Dict[str, object]) -> bool:
-    if "low_signal_announcement" in story:
-        return bool(story.get("low_signal_announcement"))
-    return bool(story_materiality_for_render(story)["low_signal_announcement"])
+    return story_is_low_signal_for_policy(story)
 
 
 def story_has_material_signal_for_render(story: Dict[str, object]) -> bool:
-    if "material_operator_signal" in story:
-        return bool(story.get("material_operator_signal"))
-    return bool(story_materiality_for_render(story)["material_operator_signal"])
+    return story_has_material_signal_for_policy(story)
 
 
 def story_signal_quality_for_render(story: Dict[str, object]) -> str:
-    explicit = compact_text(story.get("signal_quality")).lower()
-    if explicit in {"strong", "medium", "weak"}:
-        return explicit
-    return compact_text(story_materiality_for_render(story)["signal_quality"]).lower()
+    return story_signal_quality_for_policy(story)
 
 
 def daily_story_passes_render_quality(story: Dict[str, object]) -> bool:
@@ -799,11 +784,27 @@ def append_daily_story(
     return True
 
 
-def select_daily_stories(
+def daily_collapse_reason(code: str, reason: str) -> Dict[str, object]:
+    return {
+        "triggered": True,
+        "code": code,
+        "reason": reason,
+    }
+
+
+def no_daily_collapse() -> Dict[str, object]:
+    return {
+        "triggered": False,
+        "code": "",
+        "reason": "",
+    }
+
+
+def select_daily_stories_with_diagnostics(
     operator_brief: Dict[str, object],
     *,
     story_limit: int = DAILY_STORY_LIMIT,
-) -> List[Dict[str, object]]:
+) -> Dict[str, object]:
     story_limit = max(1, story_limit)
     story_cards = operator_brief.get("story_cards")
     all_stories = [
@@ -820,10 +821,14 @@ def select_daily_stories(
 
     selected: List[Dict[str, object]] = []
     seen: set[str] = set()
+    render_quality_filtered = 0
+    duplicate_filtered = 0
     for story in candidates:
         if not daily_story_passes_render_quality(story):
+            render_quality_filtered += 1
             continue
-        append_daily_story(story, selected, seen)
+        if not append_daily_story(story, selected, seen):
+            duplicate_filtered += 1
         if len(selected) >= story_limit:
             break
 
@@ -831,6 +836,8 @@ def select_daily_stories(
     # still has credible near-misses. Story cards remain the primary path; this
     # fallback only fills a thin daily render with conservative, target-fit stories.
     backfill_target = min(story_limit, DAILY_MIN_STORY_COUNT)
+    backfill_candidates: List[Dict[str, object]] = []
+    backfill_selected = 0
     if isinstance(story_cards, list) and len(selected) < backfill_target:
         backfill_candidates = [
             story
@@ -838,14 +845,81 @@ def select_daily_stories(
             if daily_backfill_story_is_worthy(story)
         ]
         for story in sorted(backfill_candidates, key=daily_backfill_rank, reverse=True):
-            append_daily_story(story, selected, seen)
+            if append_daily_story(story, selected, seen):
+                backfill_selected += 1
             if len(selected) >= backfill_target:
                 break
 
+    single_story_rejected = False
+    rejected_single_story_id = ""
     if len(selected) == 1 and not single_daily_story_is_worthy(selected[0]):
-        return []
+        single_story_rejected = True
+        rejected_single_story_id = story_id_for_render(selected[0])
+        selected = []
 
-    return selected
+    if selected:
+        collapse_reason = no_daily_collapse()
+    elif not all_stories:
+        collapse_reason = daily_collapse_reason(
+            "no_stories_built",
+            "No stories were built from screened items.",
+        )
+    elif single_story_rejected:
+        collapse_reason = daily_collapse_reason(
+            "single_story_failed_stricter_gate",
+            "Exactly one story survived daily selection but failed the stricter single-story quality gate.",
+        )
+    elif isinstance(story_cards, list) and not story_cards:
+        collapse_reason = daily_collapse_reason(
+            "no_story_cards_passed_admission",
+            "No story cards passed the main admission gates.",
+        )
+    elif candidates and render_quality_filtered >= len(candidates):
+        collapse_reason = daily_collapse_reason(
+            "story_cards_failed_render_quality",
+            "Story cards existed, but all failed the final daily render-quality gate.",
+        )
+    elif isinstance(story_cards, list) and len(selected) < backfill_target and not backfill_candidates:
+        collapse_reason = daily_collapse_reason(
+            "no_backfill_candidates_passed_daily_gate",
+            "Story cards were below the daily minimum and no broader story passed the daily backfill gate.",
+        )
+    else:
+        collapse_reason = daily_collapse_reason(
+            "daily_selection_empty_after_quality_duplicate_and_backfill_gates",
+            "Daily selection ended empty after quality, duplicate, single-story, and backfill gates.",
+        )
+
+    return {
+        "stories": selected,
+        "collapse_reason": collapse_reason,
+        "selection_counts": {
+            "story_limit": story_limit,
+            "all_story_count": len(all_stories),
+            "primary_candidate_count": len(candidates),
+            "story_card_count": len(story_cards) if isinstance(story_cards, list) else None,
+            "render_quality_filtered_count": render_quality_filtered,
+            "duplicate_filtered_count": duplicate_filtered,
+            "backfill_candidate_count": len(backfill_candidates),
+            "backfill_selected_count": backfill_selected,
+            "selected_count": len(selected),
+            "single_story_rejected": single_story_rejected,
+            "rejected_single_story_id": rejected_single_story_id,
+        },
+    }
+
+
+def select_daily_stories(
+    operator_brief: Dict[str, object],
+    *,
+    story_limit: int = DAILY_STORY_LIMIT,
+) -> List[Dict[str, object]]:
+    result = select_daily_stories_with_diagnostics(operator_brief, story_limit=story_limit)
+    return [
+        story
+        for story in result.get("stories", []) or []
+        if isinstance(story, dict)
+    ]
 
 
 def build_daily_story_header(
@@ -904,6 +978,45 @@ def render_daily_headlines(stories: List[Dict[str, object]]) -> str:
         <p style="margin: 12px 0 8px 0; font-size: 12px; font-weight: 700; color:#555; letter-spacing: 0.02em;">
           HEADLINES
         </p>
+    """
+
+
+def render_daily_near_misses(
+    near_miss_items: List[Dict[str, object]] | None,
+    *,
+    stories: List[Dict[str, object]],
+) -> str:
+    if stories or not near_miss_items:
+        return ""
+
+    rows = []
+    for item in near_miss_items[:NEAR_MISS_LIMIT]:
+        title = compact_text(item.get("title"))
+        summary = sentence_limited(item.get("summary"), 1)
+        miss_reason = compact_text(item.get("miss_reason"))
+        if not title or not summary or not miss_reason:
+            continue
+        rows.append(
+            f"""
+            <li style="margin: 0 0 8px 0;">
+              <strong>{escaped(title)}:</strong> {escaped(summary)}
+              Did not clear the bar because {escaped(miss_reason)}.
+            </li>
+            """
+        )
+
+    if not rows:
+        return ""
+
+    return f"""
+        <div style="margin: 4px 0 14px 0; padding-top: 4px;">
+          <p style="margin: 0 0 8px 0; font-size: 12px; font-weight: 700; color:#555; letter-spacing: 0.02em;">
+            WORTH A QUICK GLANCE
+          </p>
+          <ul style="margin: 0; padding-left: 18px; color:#333;">
+            {''.join(rows)}
+          </ul>
+        </div>
     """
 
 
@@ -1007,7 +1120,12 @@ def format_daily_operator_brief_html(
     story_limit: int = DAILY_STORY_LIMIT,
 ) -> str:
     date_str = local_now().strftime("%B %d, %Y")
-    stories = select_daily_stories(operator_brief, story_limit=story_limit)
+    daily_selection = select_daily_stories_with_diagnostics(operator_brief, story_limit=story_limit)
+    stories = [
+        story
+        for story in daily_selection.get("stories", []) or []
+        if isinstance(story, dict)
+    ]
 
     html = f"""
     <html>
@@ -1015,6 +1133,7 @@ def format_daily_operator_brief_html(
         <h2 style="margin: 0 0 4px 0; font-size: 22px; line-height: 1.25;">Daily AI Digest - {date_str}</h2>
         <p style="margin: 0 0 8px 0; color:#444;">{escaped(build_daily_story_header(operator_brief, stories))}</p>
         {render_daily_headlines(stories)}
+        {render_daily_near_misses(operator_brief.get("near_miss_items", []) or [], stories=stories)}
         {render_daily_story_cards(stories)}
       </body>
     </html>

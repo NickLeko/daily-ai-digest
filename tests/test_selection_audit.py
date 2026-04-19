@@ -179,6 +179,37 @@ class SelectionAuditTests(unittest.TestCase):
         )
         self.assertFalse(diagnostics["no_signal_fallback"]["triggered"])
 
+    def test_selection_audit_records_confidence_display_override(self) -> None:
+        selected = story(
+            "selected",
+            "Medium-quality source confidence story",
+            confidence="High",
+            signal_quality="medium",
+        )
+        brief = {
+            "summary": {"raw_item_count": 1},
+            "stories": [selected],
+            "story_cards": [selected],
+            "items": [item("item-selected", selected)],
+        }
+
+        audit = build_selection_audit(brief)
+        row = audit["stories"][0]
+        diagnostics = build_selection_diagnostics(brief, mode="daily")
+
+        self.assertEqual(row["confidence"], "High")
+        self.assertEqual(row["confidence_display"], "Medium")
+        self.assertEqual(
+            row["confidence_override_reason"],
+            "capped_to_medium_for_medium_signal_quality",
+        )
+        self.assertEqual(diagnostics["selected_stories"][0]["confidence"], "High")
+        self.assertEqual(diagnostics["selected_stories"][0]["confidence_display"], "Medium")
+        self.assertEqual(
+            diagnostics["selected_stories"][0]["confidence_override_reason"],
+            "capped_to_medium_for_medium_signal_quality",
+        )
+
     def test_selection_diagnostics_explain_no_signal_fallback(self) -> None:
         weak = story(
             "weak",
@@ -206,8 +237,8 @@ class SelectionAuditTests(unittest.TestCase):
 
         self.assertEqual(diagnostics["selected_stories"], [])
         self.assertTrue(fallback["triggered"])
-        self.assertIn("no story cards passed admission gates", fallback["reason"])
-        self.assertIn("soft announcement", fallback["reason"])
+        self.assertEqual(fallback["reason_code"], "no_story_cards_passed_admission")
+        self.assertIn("No story cards passed the main admission gates", fallback["reason"])
         self.assertEqual(fallback["screened_item_count"], 1)
 
     def test_selection_audit_reports_repo_gate_and_daily_limit(self) -> None:

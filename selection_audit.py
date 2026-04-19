@@ -5,10 +5,9 @@ from collections import Counter
 from typing import Any, Dict, List
 
 from formatter import (
-    DAILY_STORY_LIMIT,
     daily_story_passes_render_quality,
     single_daily_story_is_worthy,
-    select_daily_stories,
+    select_daily_stories_with_diagnostics,
     stories_are_render_duplicates,
     story_id_for_render,
 )
@@ -19,6 +18,7 @@ from operator_brief import (
     story_surface_worthiness,
     story_surface_worthiness_reason,
 )
+from selection_policy import DAILY_STORY_LIMIT, confidence_display_for_story
 from state import local_now
 
 
@@ -44,6 +44,18 @@ def score_summary(entry: Dict[str, Any]) -> Dict[str, Any]:
         "reliability_score": int(entry.get("reliability_score", 0) or 0),
         "reliability_label": str(entry.get("reliability_label", "") or ""),
         "signal": str(entry.get("signal", "") or ""),
+    }
+
+
+def confidence_summary(entry: Dict[str, Any]) -> Dict[str, str]:
+    fallback = confidence_display_for_story(entry)
+    display = str(entry.get("confidence_display", "") or fallback["confidence_display"])
+    reason = str(entry.get("confidence_override_reason", "") or fallback["confidence_override_reason"])
+    original = str(entry.get("confidence", "") or entry.get("reliability_label", "") or "")
+    return {
+        "original": original,
+        "display": display,
+        "override_reason": reason,
     }
 
 
@@ -145,7 +157,12 @@ def daily_story_decisions(operator_brief: Dict[str, Any]) -> Dict[str, Dict[str,
     source_stories = story_cards if isinstance(story_cards, list) else operator_brief.get("stories", [])
     candidates = [story for story in (source_stories or []) if isinstance(story, dict)]
     all_stories = [story for story in (operator_brief.get("stories", []) or []) if isinstance(story, dict)]
-    selected_daily = select_daily_stories(operator_brief, story_limit=DAILY_STORY_LIMIT)
+    daily_selection = select_daily_stories_with_diagnostics(operator_brief, story_limit=DAILY_STORY_LIMIT)
+    selected_daily = [
+        story
+        for story in daily_selection.get("stories", []) or []
+        if isinstance(story, dict)
+    ]
     selected_daily_ids = {story_id_for_render(story) for story in selected_daily}
 
     decisions: Dict[str, Dict[str, Any]] = {}
@@ -287,6 +304,9 @@ def build_story_audit(operator_brief: Dict[str, Any]) -> List[Dict[str, Any]]:
                     ],
                 },
                 "confidence": str(story.get("confidence", "") or story.get("reliability_label", "") or ""),
+                "confidence_display": confidence_summary(story)["display"],
+                "confidence_override_reason": confidence_summary(story)["override_reason"],
+                "confidence_summary": confidence_summary(story),
                 "penalties_demotions": selection_penalties(story),
                 "surface_worthiness": {
                     "passes": story_is_surface_worthy(story),
@@ -358,6 +378,9 @@ def build_item_audit(
                     ],
                 },
                 "confidence": str(item.get("confidence", "") or item.get("reliability_label", "") or ""),
+                "confidence_display": confidence_summary(item)["display"],
+                "confidence_override_reason": confidence_summary(item)["override_reason"],
+                "confidence_summary": confidence_summary(item),
                 "penalties_demotions": selection_penalties(item),
                 "repo_healthcare_anchor_gate": repo_healthcare_anchor_gate(item),
                 "duplicate_suppression": {
@@ -376,6 +399,10 @@ def build_item_audit(
 def build_selection_audit(operator_brief: Dict[str, Any]) -> Dict[str, Any]:
     story_rows = build_story_audit(operator_brief)
     item_rows = build_item_audit(operator_brief, story_rows)
+    daily_selection = select_daily_stories_with_diagnostics(
+        operator_brief,
+        story_limit=DAILY_STORY_LIMIT,
+    )
     return {
         "version": 1,
         "generated_at": local_now().isoformat(),
@@ -391,6 +418,10 @@ def build_selection_audit(operator_brief: Dict[str, Any]) -> Dict[str, Any]:
                     if (row.get("shorter_digest_selection", {}) or {}).get("selected")
                 ]
             ),
+            "daily_selection": {
+                "collapse_reason": daily_selection.get("collapse_reason", {}),
+                "selection_counts": daily_selection.get("selection_counts", {}),
+            },
         },
         "stories": story_rows,
         "items": item_rows,
@@ -412,6 +443,9 @@ def daily_reason_counts(rows: List[Dict[str, Any]]) -> Dict[str, int]:
 
 def no_signal_fallback_diagnostic(audit: Dict[str, Any]) -> Dict[str, Any]:
     stories = [row for row in audit.get("stories", []) or [] if isinstance(row, dict)]
+    summary = audit.get("summary", {}) or {}
+    daily_selection = summary.get("daily_selection", {}) or {}
+    collapse_reason = daily_selection.get("collapse_reason", {}) or {}
     daily_selected = [
         row
         for row in stories
@@ -424,6 +458,7 @@ def no_signal_fallback_diagnostic(audit: Dict[str, Any]) -> Dict[str, Any]:
             "screened_item_count": int((audit.get("summary", {}) or {}).get("raw_item_count", 0) or 0),
             "story_count": len(stories),
             "story_card_count": int((audit.get("summary", {}) or {}).get("story_card_count", 0) or 0),
+            "collapse_reason": collapse_reason,
         }
 
     screened_item_count = int((audit.get("summary", {}) or {}).get("raw_item_count", 0) or 0)
@@ -435,7 +470,9 @@ def no_signal_fallback_diagnostic(audit: Dict[str, Any]) -> Dict[str, Any]:
         if (row.get("shorter_digest_selection", {}) or {}).get("status") == "filtered"
     ]
 
-    if not stories:
+    if collapse_reason.get("triggered") and collapse_reason.get("reason"):
+        reason = str(collapse_reason.get("reason", ""))
+    elif not stories:
         reason = "no stories were built from screened items"
     elif story_card_count == 0:
         top_reasons = reason_counts(filtered, key="primary_reason")
@@ -451,6 +488,8 @@ def no_signal_fallback_diagnostic(audit: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "triggered": True,
         "reason": reason,
+        "reason_code": str(collapse_reason.get("code", "") or ""),
+        "collapse_reason": collapse_reason,
         "screened_item_count": screened_item_count,
         "story_count": len(stories),
         "story_card_count": story_card_count,
@@ -491,6 +530,10 @@ def story_selection_diagnostic(
         "materiality_reason": str((row.get("materiality", {}) or {}).get("materiality_reason", "") or story.get("materiality_reason", "")),
         "operator_relevance": str((row.get("target_fit", {}) or {}).get("operator_relevance", "") or story.get("operator_relevance", "")),
         "confidence": str(row.get("confidence", "") or story.get("confidence", "")),
+        "confidence_display": str(row.get("confidence_display", "") or story.get("confidence_display", "")),
+        "confidence_override_reason": str(
+            row.get("confidence_override_reason", "") or story.get("confidence_override_reason", "")
+        ),
         "admission_decision": admission_decision,
         "primary_reason_selected": primary_reason,
         "penalties_demotions": row.get("penalties_demotions", []) or selection_penalties(story),
@@ -519,6 +562,7 @@ def build_selection_diagnostics(
         "version": 1,
         "mode": normalized_mode,
         "generated_at": audit["generated_at"],
+        "daily_selection": (audit.get("summary", {}) or {}).get("daily_selection", {}),
         "selected_stories": [
             story_selection_diagnostic(
                 row,
@@ -654,6 +698,8 @@ def render_selection_audit_markdown(audit: Dict[str, Any]) -> str:
         for row in daily_filtered
         if bool((row.get("shorter_digest_selection", {}) or {}).get("duplicate_suppression_affected"))
     )
+    daily_selection = (audit.get("summary", {}) or {}).get("daily_selection", {}) or {}
+    collapse_reason = daily_selection.get("collapse_reason", {}) or {}
 
     lines = [
         "# Selection Audit Summary",
@@ -670,6 +716,11 @@ def render_selection_audit_markdown(audit: Dict[str, Any]) -> str:
             f"{daily_duplicate_count} duplicate-suppressed, {len(backfill_filtered)} not backfilled from broader stories."
         ),
         f"- Target-fit failures among filtered stories: {len(target_fit_filtered)}.",
+        (
+            f"- No-signal collapse reason: {collapse_reason.get('code')}: {collapse_reason.get('reason')}"
+            if collapse_reason.get("triggered")
+            else "- No-signal collapse reason: none."
+        ),
         "",
         "## Surfaced Stories",
     ]
