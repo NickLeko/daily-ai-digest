@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from config import (
+    AppConfig,
     OBJECTIVE_SCORE_WEIGHTS,
     SCORING_WEIGHTS,
 )
@@ -846,6 +847,7 @@ def score_item(
     *,
     memory: DigestMemory,
     now: datetime,
+    config: AppConfig | None = None,
 ) -> DigestItem:
     theme_hits = filter_theme_hits_for_item(item, extract_theme_hits(item))
     matched_themes = sorted(theme_hits.keys())
@@ -857,6 +859,7 @@ def score_item(
         themes=matched_themes,
         entities=entity_keys,
         now=now,
+        config=config,
     )
     dimension_scores = compute_dimension_scores(
         item,
@@ -900,12 +903,13 @@ def attach_priority_scores(
     items: List[DigestItem],
     memory: DigestMemory | None,
     *,
+    config: AppConfig | None = None,
     now: datetime | None = None,
     sort_items: bool = True,
 ) -> List[DigestItem]:
     now = now or datetime.now(timezone.utc)
     memory = memory or {"version": 1, "events": []}
-    scored = [score_item(item, memory=memory, now=now) for item in items]
+    scored = [score_item(item, memory=memory, now=now, config=config) for item in items]
     if not sort_items:
         return scored
     return sort_items_by_priority(scored)

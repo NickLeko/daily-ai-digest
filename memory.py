@@ -8,10 +8,6 @@ from zoneinfo import ZoneInfo
 
 from config import (
     AppConfig,
-    BRIEF_HISTORY_MAX_DAYS,
-    HISTORY_CONTEXT_WINDOW_DAYS,
-    HISTORY_MAX_EVENTS,
-    HISTORY_REPEAT_WINDOW_DAYS,
     current_config,
 )
 from storage import read_json_file, write_json_file
@@ -58,6 +54,7 @@ def _parse_event_date(value: str) -> datetime | None:
 
 
 def load_digest_memory(*, config: AppConfig | None = None) -> DigestMemory:
+    resolved = _resolved_config(config)
     data = read_json_file(memory_path(config=config), _default_memory(), expected_type=dict)
 
     events = data.get("events", [])
@@ -65,7 +62,7 @@ def load_digest_memory(*, config: AppConfig | None = None) -> DigestMemory:
         events = []
 
     cleaned_events: List[Dict[str, Any]] = []
-    for event in events[-HISTORY_MAX_EVENTS:]:
+    for event in events[-resolved.history_max_events:]:
         if not isinstance(event, dict):
             continue
         cleaned_events.append(
@@ -102,7 +99,7 @@ def load_digest_memory(*, config: AppConfig | None = None) -> DigestMemory:
         daily_briefs = []
 
     cleaned_briefs: List[Dict[str, Any]] = []
-    for brief in daily_briefs[-BRIEF_HISTORY_MAX_DAYS:]:
+    for brief in daily_briefs[-resolved.brief_history_max_days:]:
         if not isinstance(brief, dict):
             continue
         stories = []
@@ -183,8 +180,10 @@ def build_history_context(
     themes: List[str],
     entities: List[str],
     now: datetime,
+    config: AppConfig | None = None,
 ) -> Dict[str, Any]:
-    repeat_cutoff = now - timedelta(days=HISTORY_REPEAT_WINDOW_DAYS)
+    resolved = _resolved_config(config)
+    repeat_cutoff = now - timedelta(days=resolved.history_repeat_window_days)
     item_key = str(item.get("item_key", "") or "")
 
     item_seen_count = 0
@@ -230,9 +229,11 @@ def build_memory_snapshot(
     memory: DigestMemory,
     *,
     now: datetime | None = None,
+    config: AppConfig | None = None,
 ) -> Dict[str, Any]:
+    resolved = _resolved_config(config)
     now = now or datetime.now(ZoneInfo("UTC"))
-    cutoff = now - timedelta(days=HISTORY_CONTEXT_WINDOW_DAYS)
+    cutoff = now - timedelta(days=resolved.history_context_window_days)
     theme_counts: Counter[str] = Counter()
     entity_counts: Counter[str] = Counter()
 
@@ -301,7 +302,7 @@ def build_memory_snapshot(
             )
 
     return {
-        "lookback_days": HISTORY_CONTEXT_WINDOW_DAYS,
+        "lookback_days": resolved.history_context_window_days,
         "top_themes": top_themes,
         "top_entities": top_entities,
         "event_count": len(memory.get("events", [])),
@@ -323,6 +324,7 @@ def record_digest_items(
     *,
     config: AppConfig | None = None,
 ) -> None:
+    resolved = _resolved_config(config)
     memory = load_digest_memory(config=config)
     events = list(memory.get("events", []))
     digest_date = _today_key(config=config)
@@ -369,7 +371,7 @@ def record_digest_items(
             }
         )
 
-    memory["events"] = events[-HISTORY_MAX_EVENTS:]
+    memory["events"] = events[-resolved.history_max_events:]
     save_digest_memory(memory, config=config)
 
 
@@ -459,6 +461,7 @@ def record_operator_brief(
     *,
     config: AppConfig | None = None,
 ) -> None:
+    resolved = _resolved_config(config)
     memory = load_digest_memory(config=config)
     daily_briefs = [
         entry
@@ -475,7 +478,7 @@ def record_operator_brief(
     daily_briefs = sorted(
         daily_briefs,
         key=lambda brief_entry: str(brief_entry.get("date", "") or ""),
-    )[-BRIEF_HISTORY_MAX_DAYS:]
+    )[-resolved.brief_history_max_days:]
     memory["version"] = 2
     memory["daily_briefs"] = daily_briefs
     save_digest_memory(memory, config=config)

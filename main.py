@@ -126,7 +126,7 @@ def run(
     log("Fetched items", count=len(items))
     log("Summarizing items with OpenAI...")
     enriched_items = summarize_items(items, config=resolved)
-    memory_snapshot = build_memory_snapshot(memory)
+    memory_snapshot = build_memory_snapshot(memory, config=resolved)
 
     section_counts = validate_digest_items(enriched_items)
     log(

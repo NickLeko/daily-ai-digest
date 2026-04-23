@@ -120,6 +120,7 @@ def fetch_github_repos(
         sent_item_keys=sent_item_keys,
         limit=resolved.max_items_per_category,
         memory=memory,
+        config=resolved,
         enforce_repo_generic_cap=True,
         excluded_reasons=excluded_reasons,
     )

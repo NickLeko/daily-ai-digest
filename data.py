@@ -67,7 +67,7 @@ def get_real_items(
     config: AppConfig | None = None,
 ) -> List[DigestItem]:
     resolved = config or current_config()
-    memory = memory or load_digest_memory()
+    memory = memory or load_digest_memory(config=resolved)
     repo_items = fetch_github_repos(memory, config=resolved)
     news_items = fetch_news_items(memory, config=resolved)
     regulatory_items = fetch_regulatory_items(memory, config=resolved)

@@ -1243,19 +1243,29 @@ def apply_change_status(
     return stories, change_entries[:6]
 
 
-def select_story_cards(stories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def select_story_cards(
+    stories: List[Dict[str, Any]],
+    *,
+    story_limit: int = OPERATOR_STORY_LIMIT,
+) -> List[Dict[str, Any]]:
+    effective_story_limit = max(int(story_limit), 0)
+    if effective_story_limit == 0:
+        return []
+
     selected: List[Dict[str, Any]] = []
     per_category_cap = {"Repo": 2, "News": 3, "Regulatory": 2}
     category_counts = Counter()
 
     for category in ("Regulatory", "News", "Repo"):
+        if len(selected) >= effective_story_limit:
+            break
         candidate = next(
             (
                 story
                 for story in stories
                 if story.get("category") == category
                 and story_is_surface_worthy(story)
-                and category_counts[category] < per_category_cap.get(category, OPERATOR_STORY_LIMIT)
+                and category_counts[category] < per_category_cap.get(category, effective_story_limit)
             ),
             None,
         )
@@ -1269,14 +1279,14 @@ def select_story_cards(stories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not story_is_surface_worthy(story):
             continue
         category = str(story.get("category", "") or "")
-        if category_counts[category] >= per_category_cap.get(category, OPERATOR_STORY_LIMIT):
+        if category_counts[category] >= per_category_cap.get(category, effective_story_limit):
             continue
         selected.append(story)
         category_counts[category] += 1
-        if len(selected) >= OPERATOR_STORY_LIMIT:
+        if len(selected) >= effective_story_limit:
             break
 
-    return selected[:OPERATOR_STORY_LIMIT]
+    return selected[:effective_story_limit]
 
 
 def apply_story_metadata_to_items(
@@ -1374,7 +1384,10 @@ def build_operator_brief_artifact(
         if not why_it_matters_is_specific(normalized_item["why_it_matters"]):
             normalized_item["why_it_matters"] = parent_story["why_it_matters"]
 
-    story_cards = select_story_cards(stories)
+    story_cards = select_story_cards(
+        stories,
+        story_limit=resolved.operator_story_limit,
+    )
     near_miss_items = build_near_miss_items(stories, selected_stories=story_cards)
     skipped_news_items = build_skipped_news_items(stories, selected_stories=story_cards)
     top_picks = build_story_top_picks(

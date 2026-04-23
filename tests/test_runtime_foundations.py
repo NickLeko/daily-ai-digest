@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -9,13 +10,14 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
+import data
 import main
 import scoring
 import summarize
 import taxonomy
 from config import load_config
 from emailer import send_email
-from memory import load_digest_memory
+from memory import build_memory_snapshot, load_digest_memory, record_digest_items, record_operator_brief
 from services import get_digest_analyst_service, get_openai_client
 from state import load_state
 
@@ -192,6 +194,156 @@ class PersistenceRecoveryTests(unittest.TestCase):
 
         self.assertEqual(loaded_state["sent_items"], ["news::custom"])
         self.assertEqual(loaded_memory["events"][0]["item_key"], "news::custom")
+
+    def test_load_digest_memory_respects_explicit_retention_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_path = Path(tmpdir) / "digest_memory.json"
+            memory_path.write_text(
+                json.dumps(
+                    {
+                        "version": 2,
+                        "events": [
+                            {"date": "2026-04-21", "item_key": "news::older"},
+                            {"date": "2026-04-22", "item_key": "news::latest"},
+                        ],
+                        "daily_briefs": [
+                            {"date": "2026-04-21", "stories": []},
+                            {"date": "2026-04-22", "stories": []},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = load_config(
+                env={
+                    "DIGEST_MEMORY_FILE_PATH": str(memory_path),
+                    "HISTORY_MAX_EVENTS": "1",
+                    "BRIEF_HISTORY_MAX_DAYS": "1",
+                    "LOCAL_TIMEZONE": "UTC",
+                }
+            )
+
+            loaded = load_digest_memory(config=config)
+
+        self.assertEqual([event["item_key"] for event in loaded["events"]], ["news::latest"])
+        self.assertEqual([brief["date"] for brief in loaded["daily_briefs"]], ["2026-04-22"])
+
+    def test_build_memory_snapshot_uses_explicit_context_window(self) -> None:
+        config = load_config(
+            env={
+                "HISTORY_CONTEXT_WINDOW_DAYS": "1",
+                "LOCAL_TIMEZONE": "UTC",
+            }
+        )
+
+        snapshot = build_memory_snapshot(
+            {
+                "version": 2,
+                "events": [
+                    {
+                        "date": "2026-04-21",
+                        "themes": ["older_theme"],
+                        "entities": ["older_entity"],
+                    },
+                    {
+                        "date": "2026-04-23",
+                        "themes": ["recent_theme"],
+                        "entities": ["recent_entity"],
+                    },
+                ],
+                "daily_briefs": [],
+            },
+            now=datetime.fromisoformat("2026-04-23T00:00:00+00:00"),
+            config=config,
+        )
+
+        self.assertEqual(snapshot["lookback_days"], 1)
+        self.assertEqual(snapshot["top_themes"][0]["theme"], "recent_theme")
+        self.assertEqual(snapshot["top_entities"][0]["entity"], "recent_entity")
+
+    def test_record_helpers_respect_explicit_retention_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_path = Path(tmpdir) / "digest_memory.json"
+            config = load_config(
+                env={
+                    "DIGEST_MEMORY_FILE_PATH": str(memory_path),
+                    "HISTORY_MAX_EVENTS": "1",
+                    "BRIEF_HISTORY_MAX_DAYS": "1",
+                    "LOCAL_TIMEZONE": "UTC",
+                }
+            )
+
+            record_digest_items(
+                [
+                    {
+                        "item_key": "news::first",
+                        "category": "News",
+                        "title": "First item",
+                        "url": "https://example.com/first",
+                        "source": "Example Source",
+                    }
+                ],
+                config=config,
+            )
+            record_digest_items(
+                [
+                    {
+                        "item_key": "news::second",
+                        "category": "News",
+                        "title": "Second item",
+                        "url": "https://example.com/second",
+                        "source": "Example Source",
+                    }
+                ],
+                config=config,
+            )
+            record_operator_brief(
+                {
+                    "date": "2026-04-21",
+                    "stories": [],
+                    "operator_moves": {"top_insight": "Older brief"},
+                },
+                config=config,
+            )
+            record_operator_brief(
+                {
+                    "date": "2026-04-22",
+                    "stories": [],
+                    "operator_moves": {"top_insight": "Latest brief"},
+                },
+                config=config,
+            )
+
+            loaded = load_digest_memory(config=config)
+
+        self.assertEqual([event["item_key"] for event in loaded["events"]], ["news::second"])
+        self.assertEqual([brief["date"] for brief in loaded["daily_briefs"]], ["2026-04-22"])
+
+
+class DataLoadingTests(unittest.TestCase):
+    def test_get_real_items_lazy_memory_load_honors_explicit_config(self) -> None:
+        config = load_config(
+            env={
+                "DIGEST_MEMORY_FILE_PATH": "/tmp/custom-memory.json",
+                "LOCAL_TIMEZONE": "UTC",
+            }
+        )
+        memory = {"version": 2, "events": [], "daily_briefs": []}
+
+        with patch("data.load_digest_memory", return_value=memory) as load_memory_mock, patch(
+            "data.fetch_github_repos", return_value=[]
+        ) as fetch_repos_mock, patch(
+            "data.fetch_news_items", return_value=[]
+        ) as fetch_news_mock, patch(
+            "data.fetch_regulatory_items", return_value=[]
+        ) as fetch_regulatory_mock:
+            items = data.get_real_items(config=config)
+
+        self.assertEqual(items, [])
+        load_memory_mock.assert_called_once_with(config=config)
+        fetch_repos_mock.assert_called_once_with(memory, config=config)
+        fetch_news_mock.assert_called_once_with(memory, config=config)
+        fetch_regulatory_mock.assert_called_once_with(memory, config=config)
 
 
 class EmailerTests(unittest.TestCase):

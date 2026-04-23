@@ -79,6 +79,7 @@ def fetch_news_items(
         sent_item_keys=sent_item_keys,
         limit=resolved.max_items_per_category,
         memory=memory,
+        config=resolved,
     )
     log_section_debug("News", raw_count, len(deduped), excluded_reasons, selected)
     return selected

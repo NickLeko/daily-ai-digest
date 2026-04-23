@@ -62,6 +62,10 @@ CMS_NEWSROOM_ROW_PATTERN = re.compile(
 REGULATORY_SUBCATEGORY_BONUS = {'recall': 0, 'enforcement': 0, 'guidance': 20, 'policy': 16, 'reimbursement': 18, 'interoperability': 20, 'privacy': 18, 'safety_alert': 6}
 
 
+def regulatory_candidate_limit(target_items: int) -> int:
+    return max(int(target_items) * 8, 12)
+
+
 def discover_feed_url(page_url: str) -> str | None:
     try:
         resp = requests.get(
@@ -217,7 +221,11 @@ def build_regulatory_item(
         "status": status,
     }
 
-def fetch_feed_regulatory_items(source_config: Dict[str, Any]) -> Tuple[List[DigestItem], Dict[str, Any]]:
+def fetch_feed_regulatory_items(
+    source_config: Dict[str, Any],
+    *,
+    candidate_limit: int = REGULATORY_CANDIDATE_LIMIT,
+) -> Tuple[List[DigestItem], Dict[str, Any]]:
     excluded_reasons: Counter[str] = Counter()
     now = datetime.now(timezone.utc)
     max_age_days = int(source_config.get("max_age_days", 14))
@@ -235,7 +243,7 @@ def fetch_feed_regulatory_items(source_config: Dict[str, Any]) -> Tuple[List[Dig
         return [], empty_source_stats(source_config["name"], excluded_reasons)
 
     feed = feedparser.parse(feed_url)
-    entries = list(feed.entries[:REGULATORY_CANDIDATE_LIMIT])
+    entries = list(feed.entries[:candidate_limit])
     results: List[DigestItem] = []
 
     if getattr(feed, "bozo", 0) and not entries:
@@ -300,10 +308,19 @@ def fetch_feed_regulatory_items(source_config: Dict[str, Any]) -> Tuple[List[Dig
         "excluded_reasons": excluded_reasons,
     }
 
-def fetch_fda_press_release_items() -> Tuple[List[DigestItem], Dict[str, Any]]:
-    return fetch_feed_regulatory_items(REGULATORY_FEED_SOURCES[0])
+def fetch_fda_press_release_items(
+    *,
+    candidate_limit: int = REGULATORY_CANDIDATE_LIMIT,
+) -> Tuple[List[DigestItem], Dict[str, Any]]:
+    return fetch_feed_regulatory_items(
+        REGULATORY_FEED_SOURCES[0],
+        candidate_limit=candidate_limit,
+    )
 
-def fetch_cms_regulatory_items() -> Tuple[List[DigestItem], Dict[str, Any]]:
+def fetch_cms_regulatory_items(
+    *,
+    candidate_limit: int = REGULATORY_CANDIDATE_LIMIT,
+) -> Tuple[List[DigestItem], Dict[str, Any]]:
     source_config = REGULATORY_FEED_SOURCES[1]
     excluded_reasons: Counter[str] = Counter()
     now = datetime.now(timezone.utc)
@@ -332,7 +349,7 @@ def fetch_cms_regulatory_items() -> Tuple[List[DigestItem], Dict[str, Any]]:
     if not raw_entries:
         excluded_reasons["page_parse_error"] += 1
 
-    for entry in raw_entries[:REGULATORY_CANDIDATE_LIMIT]:
+    for entry in raw_entries[:candidate_limit]:
         title = entry["title"]
         summary = entry["summary"]
         published_at = entry["published_at"]
@@ -389,13 +406,28 @@ def fetch_cms_regulatory_items() -> Tuple[List[DigestItem], Dict[str, Any]]:
         "excluded_reasons": excluded_reasons,
     }
 
-def fetch_onc_regulatory_items() -> Tuple[List[DigestItem], Dict[str, Any]]:
-    return fetch_feed_regulatory_items(REGULATORY_FEED_SOURCES[2])
+def fetch_onc_regulatory_items(
+    *,
+    candidate_limit: int = REGULATORY_CANDIDATE_LIMIT,
+) -> Tuple[List[DigestItem], Dict[str, Any]]:
+    return fetch_feed_regulatory_items(
+        REGULATORY_FEED_SOURCES[2],
+        candidate_limit=candidate_limit,
+    )
 
-def fetch_ocr_regulatory_items() -> Tuple[List[DigestItem], Dict[str, Any]]:
-    return fetch_feed_regulatory_items(REGULATORY_FEED_SOURCES[3])
+def fetch_ocr_regulatory_items(
+    *,
+    candidate_limit: int = REGULATORY_CANDIDATE_LIMIT,
+) -> Tuple[List[DigestItem], Dict[str, Any]]:
+    return fetch_feed_regulatory_items(
+        REGULATORY_FEED_SOURCES[3],
+        candidate_limit=candidate_limit,
+    )
 
-def fetch_openfda_regulatory_items() -> Tuple[List[DigestItem], Dict[str, Any]]:
+def fetch_openfda_regulatory_items(
+    *,
+    candidate_limit: int = REGULATORY_CANDIDATE_LIMIT,
+) -> Tuple[List[DigestItem], Dict[str, Any]]:
     results: List[DigestItem] = []
     excluded_reasons: Counter[str] = Counter()
     raw_count = 0
@@ -405,7 +437,7 @@ def fetch_openfda_regulatory_items() -> Tuple[List[DigestItem], Dict[str, Any]]:
             resp = requests.get(
                 endpoint["url"],
                 params={
-                    "limit": REGULATORY_CANDIDATE_LIMIT,
+                    "limit": candidate_limit,
                     "sort": "report_date:desc",
                 },
                 timeout=30,
@@ -497,12 +529,13 @@ def fetch_regulatory_items(
 ) -> List[DigestItem]:
     resolved = config or current_config()
     sent_item_keys = get_sent_item_keys(config=resolved)
+    candidate_limit = regulatory_candidate_limit(resolved.regulatory_target_items)
     source_results = [
-        fetch_openfda_regulatory_items(),
-        fetch_fda_press_release_items(),
-        fetch_cms_regulatory_items(),
-        fetch_onc_regulatory_items(),
-        fetch_ocr_regulatory_items(),
+        fetch_openfda_regulatory_items(candidate_limit=candidate_limit),
+        fetch_fda_press_release_items(candidate_limit=candidate_limit),
+        fetch_cms_regulatory_items(candidate_limit=candidate_limit),
+        fetch_onc_regulatory_items(candidate_limit=candidate_limit),
+        fetch_ocr_regulatory_items(candidate_limit=candidate_limit),
     ]
 
     combined: List[DigestItem] = []
@@ -537,4 +570,4 @@ def fetch_regulatory_items(
             "Regulatory best remaining score",
             score=selection_stats["best_remaining_score"],
         )
-    return attach_priority_scores(selected, memory)
+    return attach_priority_scores(selected, memory, config=resolved)

@@ -10,9 +10,12 @@ from agent_brief import (
     coerce_brief_output,
 )
 
+import data_regulatory
+from config import load_config
 from data import (
     REGULATORY_FEED_SOURCES,
     REGULATORY_TARGET_ITEMS,
+    fetch_regulatory_items,
     keyword_matches_text,
     parse_cms_newsroom_html,
     regulatory_bucket,
@@ -1789,6 +1792,45 @@ class SignalQualityGateTests(unittest.TestCase):
         self.assertFalse(story_is_surface_worthy(cms_access_news))
         self.assertEqual(selected, [])
 
+    def test_story_cards_respect_explicit_story_limit_during_category_seeding(self) -> None:
+        regulatory_story = operator_story(
+            "regulatory-story",
+            "CMS prior auth workflow rule",
+            category="Regulatory",
+            operator_relevance="high",
+            actionability="high",
+            workflow_wedges=["prior auth"],
+            matched_themes=["healthcare_admin_automation"],
+            reliability_label="High",
+        )
+        news_story = operator_story(
+            "news-story",
+            "Hospital denials workflow launch",
+            category="News",
+            operator_relevance="high",
+            actionability="high",
+            workflow_wedges=["denials"],
+            matched_themes=["healthcare_admin_automation"],
+            reliability_label="High",
+        )
+        repo_story = operator_story(
+            "repo-story",
+            "Referral intake toolkit",
+            category="Repo",
+            operator_relevance="high",
+            actionability="high",
+            workflow_wedges=["referral"],
+            matched_themes=["low_reg_friction_wedges"],
+            reliability_label="High",
+        )
+
+        selected = select_story_cards(
+            [regulatory_story, news_story, repo_story],
+            story_limit=1,
+        )
+
+        self.assertEqual([story["story_id"] for story in selected], ["regulatory-story"])
+
 
 class DigestStrategyTests(unittest.TestCase):
     def test_top_insight_validation_accepts_prior_authorization_wording(self) -> None:
@@ -1943,6 +1985,74 @@ class WhyItMattersTests(unittest.TestCase):
 
 
 class RegulatorySelectionTests(unittest.TestCase):
+    def test_fetch_regulatory_items_threads_runtime_candidate_limit(self) -> None:
+        config = load_config(
+            env={
+                "REGULATORY_TARGET_ITEMS": "5",
+                "LOCAL_TIMEZONE": "UTC",
+            }
+        )
+        empty_stats = {
+            "raw_count": 0,
+            "normalized_count": 0,
+            "excluded_reasons": data_regulatory.Counter(),
+        }
+
+        with patch.object(
+            data_regulatory,
+            "fetch_openfda_regulatory_items",
+            return_value=([], empty_stats),
+        ) as openfda_mock, patch.object(
+            data_regulatory,
+            "fetch_fda_press_release_items",
+            return_value=([], empty_stats),
+        ) as fda_press_mock, patch.object(
+            data_regulatory,
+            "fetch_cms_regulatory_items",
+            return_value=([], empty_stats),
+        ) as cms_mock, patch.object(
+            data_regulatory,
+            "fetch_onc_regulatory_items",
+            return_value=([], empty_stats),
+        ) as onc_mock, patch.object(
+            data_regulatory,
+            "fetch_ocr_regulatory_items",
+            return_value=([], empty_stats),
+        ) as ocr_mock, patch.object(
+            data_regulatory,
+            "get_sent_item_keys",
+            return_value=set(),
+        ), patch.object(
+            data_regulatory,
+            "select_regulatory_items",
+            return_value=(
+                [],
+                {
+                    "filtered_count": 0,
+                    "excluded_reasons": data_regulatory.Counter(),
+                    "fallback_reason": "",
+                    "best_remaining_score": None,
+                },
+            ),
+        ) as select_mock, patch.object(
+            data_regulatory,
+            "attach_priority_scores",
+            return_value=[],
+        ) as attach_scores_mock, patch.object(
+            data_regulatory,
+            "log_section_debug",
+        ), patch.object(
+            data_regulatory,
+            "info",
+        ):
+            result = fetch_regulatory_items(memory={"version": 2, "events": []}, config=config)
+
+        self.assertEqual(result, [])
+        for mock in (openfda_mock, fda_press_mock, cms_mock, onc_mock, ocr_mock):
+            mock.assert_called_once_with(candidate_limit=40)
+        select_mock.assert_called_once_with([], set(), max_items=5)
+        attach_scores_mock.assert_called_once_with([], {"version": 2, "events": []}, config=config)
+
     def test_balanced_regulatory_mix_prefers_distinct_buckets(self) -> None:
         now = datetime(2026, 3, 30, 16, 0, tzinfo=timezone.utc)
         candidates = [
@@ -2084,6 +2194,78 @@ class RegulatorySelectionTests(unittest.TestCase):
 
         self.assertEqual(selected, [])
         self.assertIn("below_threshold", stats["fallback_reason"])
+
+    def test_build_operator_brief_artifact_respects_operator_story_limit(self) -> None:
+        config = load_config(
+            env={
+                "OPERATOR_STORY_LIMIT": "1",
+                "LOCAL_TIMEZONE": "UTC",
+            }
+        )
+        items = [
+            {
+                "category": "Regulatory",
+                "title": "CMS prior auth rule",
+                "url": "https://example.com/regulatory",
+                "raw_text": "Prior authorization rule with workflow evidence.",
+                "item_key": "regulatory::cms-prior-auth-rule",
+                "source": "CMS Newsroom",
+                "summary": "Primary source summary.",
+                "why_it_matters": "Prior-auth managers should audit evidence exchange this week.",
+                "signal": "high",
+                "priority_score": 40.0,
+                "objective_scores": {"career": 7.0, "build": 6.8, "content": 5.8, "regulatory": 7.1},
+                "matched_themes": ["healthcare_admin_automation"],
+                "workflow_wedges": ["prior auth"],
+                "operator_relevance": "high",
+                "near_term_actionability": "high",
+            },
+            {
+                "category": "News",
+                "title": "Hospital denials automation launch",
+                "url": "https://example.com/news",
+                "raw_text": "Denials workflow deployment proof for provider operations.",
+                "item_key": "news::denials-launch",
+                "source": "Example News",
+                "summary": "Primary source summary.",
+                "why_it_matters": "Denials leads should review deployment scope this week.",
+                "signal": "high",
+                "priority_score": 39.0,
+                "objective_scores": {"career": 6.6, "build": 6.9, "content": 5.9, "regulatory": 4.8},
+                "matched_themes": ["healthcare_admin_automation"],
+                "workflow_wedges": ["denials"],
+                "operator_relevance": "high",
+                "near_term_actionability": "high",
+            },
+            {
+                "category": "Repo",
+                "title": "Referral intake toolkit",
+                "url": "https://example.com/repo",
+                "raw_text": "Healthcare referral intake workflow open source toolkit.",
+                "item_key": "repo::referral-intake-toolkit",
+                "source": "GitHub Search",
+                "summary": "Primary source summary.",
+                "why_it_matters": "Access-center owners should test one intake handoff this week.",
+                "signal": "high",
+                "priority_score": 38.0,
+                "objective_scores": {"career": 6.2, "build": 6.7, "content": 5.4, "regulatory": 4.2},
+                "matched_themes": ["low_reg_friction_wedges"],
+                "workflow_wedges": ["referral"],
+                "operator_relevance": "high",
+                "near_term_actionability": "high",
+                "repo_topics": ["healthcare", "referral"],
+            },
+        ]
+
+        brief = build_operator_brief_artifact(
+            items,
+            memory={"version": 2, "events": [], "daily_briefs": []},
+            memory_snapshot={},
+            config=config,
+        )
+
+        self.assertEqual(len(brief["story_cards"]), 1)
+        self.assertEqual(brief["story_cards"][0]["category"], "Regulatory")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from html import unescape
 from typing import Any, Dict, List
 
 from app_logging import info
+from config import AppConfig
 from memory import DigestMemory
 from scoring import attach_priority_scores
 
@@ -171,10 +172,11 @@ def select_scored_items(
     sent_item_keys: set[str],
     limit: int,
     memory: DigestMemory | None = None,
+    config: AppConfig | None = None,
     enforce_repo_generic_cap: bool = False,
     excluded_reasons: Counter[str] | None = None,
 ) -> List[DigestItem]:
-    scored = attach_priority_scores(items, memory, sort_items=False)
+    scored = attach_priority_scores(items, memory, config=config, sort_items=False)
     ranked = sorted(
         scored,
         key=lambda item: (
@@ -208,4 +210,3 @@ def select_scored_items(
             break
 
     return selected
-
