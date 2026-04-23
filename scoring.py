@@ -6,13 +6,12 @@ from typing import Any, Dict, List
 
 from config import (
     OBJECTIVE_SCORE_WEIGHTS,
-    PRIORITY_THEME_RULES,
     SCORING_WEIGHTS,
-    TRACKED_ENTITY_RULES,
 )
 from memory import DigestMemory, build_history_context
 from selection_policy import ITEM_OBJECTIVE_MIN_SCORES
 from signal_quality import classify_operator_materiality
+from taxonomy import PRIORITY_THEME_RULES, TRACKED_ENTITY_RULES, WORKFLOW_RULES
 
 
 DigestItem = Dict[str, Any]
@@ -116,104 +115,11 @@ CONTENT_SIGNAL_KEYWORDS = [
 ]
 
 WORKFLOW_WEDGE_RULES = {
-    "prior_auth": {
-        "label": "prior auth",
-        "keywords": [
-            "prior authorization",
-            "prior auth",
-            "utilization management",
-            "utilization review",
-            "payer auth",
-        ],
-    },
-    "referral_intake": {
-        "label": "referral/intake",
-        "keywords": [
-            "referral",
-            "referrals",
-            "referral management",
-            "intake",
-            "patient intake",
-            "eligibility",
-            "benefits verification",
-        ],
-    },
-    "documentation_ambient": {
-        "label": "documentation/ambient",
-        "keywords": [
-            "documentation",
-            "ambient",
-            "scribe",
-            "charting",
-            "clinical note",
-            "note capture",
-        ],
-    },
-    "scheduling": {
-        "label": "scheduling",
-        "keywords": [
-            "scheduling",
-            "appointment",
-            "patient access",
-            "reschedule",
-            "template utilization",
-        ],
-    },
-    "rcm_denials": {
-        "label": "RCM/denials",
-        "keywords": [
-            "revenue cycle",
-            "rcm",
-            "claims",
-            "claims attachments",
-            "denials",
-            "denial",
-            "appeals",
-            "billing",
-            "reimbursement",
-        ],
-    },
-    "interoperability": {
-        "label": "interoperability",
-        "keywords": [
-            "interoperability",
-            "fhir",
-            "hl7",
-            "tefca",
-            "uscdi",
-            "api",
-            "apis",
-            "data exchange",
-            "ehr",
-            "epic",
-            "cerner",
-        ],
-    },
-    "provider_admin_ops": {
-        "label": "provider/admin ops",
-        "keywords": [
-            "contact center",
-            "call center",
-            "operations",
-            "admin",
-            "back office",
-            "forms",
-            "fax",
-            "inbox",
-            "workflow automation",
-        ],
-    },
-    "care_coordination": {
-        "label": "care coordination",
-        "keywords": [
-            "care coordination",
-            "case management",
-            "transition of care",
-            "discharge",
-            "follow-up",
-            "care management",
-        ],
-    },
+    workflow_key: {
+        "label": str(rule["label"]),
+        "keywords": list(rule["keywords"]),
+    }
+    for workflow_key, rule in WORKFLOW_RULES.items()
 }
 
 HEALTHCARE_CONTEXT_KEYWORDS = [

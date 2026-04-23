@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -8,18 +7,26 @@ from typing import Any, Dict, List
 from zoneinfo import ZoneInfo
 
 from config import (
+    AppConfig,
     BRIEF_HISTORY_MAX_DAYS,
-    DIGEST_MEMORY_FILE_PATH,
     HISTORY_CONTEXT_WINDOW_DAYS,
     HISTORY_MAX_EVENTS,
     HISTORY_REPEAT_WINDOW_DAYS,
-    LOCAL_TIMEZONE,
-    PRIORITY_THEME_RULES,
+    current_config,
 )
+from storage import read_json_file, write_json_file
+from taxonomy import theme_label
 
 
 DigestMemory = Dict[str, Any]
-MEMORY_PATH = Path(DIGEST_MEMORY_FILE_PATH)
+
+
+def _resolved_config(config: AppConfig | None = None) -> AppConfig:
+    return config or current_config()
+
+
+def memory_path(*, config: AppConfig | None = None) -> Path:
+    return Path(_resolved_config(config).digest_memory_file_path)
 
 
 def _default_memory() -> DigestMemory:
@@ -30,8 +37,8 @@ def _default_memory() -> DigestMemory:
     }
 
 
-def _today_key() -> str:
-    return datetime.now(ZoneInfo(LOCAL_TIMEZONE)).date().isoformat()
+def _today_key(*, config: AppConfig | None = None) -> str:
+    return datetime.now(ZoneInfo(_resolved_config(config).local_timezone)).date().isoformat()
 
 
 def _parse_event_date(value: str) -> datetime | None:
@@ -50,15 +57,8 @@ def _parse_event_date(value: str) -> datetime | None:
     return None
 
 
-def load_digest_memory() -> DigestMemory:
-    if not MEMORY_PATH.exists():
-        return _default_memory()
-
-    try:
-        with MEMORY_PATH.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        return _default_memory()
+def load_digest_memory(*, config: AppConfig | None = None) -> DigestMemory:
+    data = read_json_file(memory_path(config=config), _default_memory(), expected_type=dict)
 
     events = data.get("events", [])
     if not isinstance(events, list):
@@ -172,10 +172,8 @@ def load_digest_memory() -> DigestMemory:
     }
 
 
-def save_digest_memory(memory: DigestMemory) -> None:
-    MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with MEMORY_PATH.open("w", encoding="utf-8") as f:
-        json.dump(memory, f, indent=2)
+def save_digest_memory(memory: DigestMemory, *, config: AppConfig | None = None) -> None:
+    write_json_file(memory_path(config=config), memory)
 
 
 def build_history_context(
@@ -248,7 +246,7 @@ def build_memory_snapshot(
     top_themes = [
         {
             "theme": theme,
-            "label": PRIORITY_THEME_RULES.get(theme, {}).get("label", theme),
+            "label": theme_label(theme),
             "count": count,
         }
         for theme, count in theme_counts.most_common(5)
@@ -320,10 +318,14 @@ def build_memory_snapshot(
     }
 
 
-def record_digest_items(items: List[Dict[str, Any]]) -> None:
-    memory = load_digest_memory()
+def record_digest_items(
+    items: List[Dict[str, Any]],
+    *,
+    config: AppConfig | None = None,
+) -> None:
+    memory = load_digest_memory(config=config)
     events = list(memory.get("events", []))
-    digest_date = _today_key()
+    digest_date = _today_key(config=config)
 
     for item in items:
         events.append(
@@ -368,15 +370,16 @@ def record_digest_items(items: List[Dict[str, Any]]) -> None:
         )
 
     memory["events"] = events[-HISTORY_MAX_EVENTS:]
-    save_digest_memory(memory)
+    save_digest_memory(memory, config=config)
 
 
 def latest_previous_brief(
     memory: DigestMemory,
     *,
     before_date: str | None = None,
+    config: AppConfig | None = None,
 ) -> Dict[str, Any] | None:
-    target_date = before_date or _today_key()
+    target_date = before_date or _today_key(config=config)
     candidates = [
         brief
         for brief in memory.get("daily_briefs", [])
@@ -387,7 +390,11 @@ def latest_previous_brief(
     return sorted(candidates, key=lambda brief: str(brief.get("date", "") or ""))[-1]
 
 
-def _brief_history_entry(brief: Dict[str, Any]) -> Dict[str, Any]:
+def _brief_history_entry(
+    brief: Dict[str, Any],
+    *,
+    config: AppConfig | None = None,
+) -> Dict[str, Any]:
     stories = []
     for story in brief.get("stories", []):
         if not isinstance(story, dict):
@@ -427,7 +434,7 @@ def _brief_history_entry(brief: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     return {
-        "date": str(brief.get("date", "") or _today_key()),
+        "date": str(brief.get("date", "") or _today_key(config=config)),
         "generated_at": str(brief.get("generated_at", "") or ""),
         "top_insight": str(((brief.get("operator_moves", {}) or {}).get("top_insight", "")) or ""),
         "stories": stories,
@@ -447,14 +454,18 @@ def _brief_history_entry(brief: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def record_operator_brief(brief: Dict[str, Any]) -> None:
-    memory = load_digest_memory()
+def record_operator_brief(
+    brief: Dict[str, Any],
+    *,
+    config: AppConfig | None = None,
+) -> None:
+    memory = load_digest_memory(config=config)
     daily_briefs = [
         entry
         for entry in memory.get("daily_briefs", [])
         if isinstance(entry, dict)
     ]
-    entry = _brief_history_entry(brief)
+    entry = _brief_history_entry(brief, config=config)
     daily_briefs = [
         brief_entry
         for brief_entry in daily_briefs
@@ -467,4 +478,4 @@ def record_operator_brief(brief: Dict[str, Any]) -> None:
     )[-BRIEF_HISTORY_MAX_DAYS:]
     memory["version"] = 2
     memory["daily_briefs"] = daily_briefs
-    save_digest_memory(memory)
+    save_digest_memory(memory, config=config)

@@ -1,15 +1,10 @@
 import argparse
 import json
+from pathlib import Path
 
+from app_logging import configure_logging, info
+from config import AppConfig, current_config
 from data import get_real_items
-from config import (
-    DIGEST_MODE,
-    EMAIL_SUBJECT_PREFIX,
-    MAX_ITEMS_PER_CATEGORY,
-    OPERATOR_BRIEF_FILE_PATH,
-    OPERATOR_COCKPIT_FILE_PATH,
-    REGULATORY_TARGET_ITEMS,
-)
 from formatter import (
     format_operator_brief_html,
     format_operator_cockpit_html,
@@ -30,19 +25,19 @@ from selection_audit import (
     write_selection_audit,
 )
 from state import already_sent_today, local_now, mark_sent
+from storage import write_json_file
 from summarize import summarize_items
 from weekly_memo import DEFAULT_LOOKBACK_DAYS, WEEKLY_MEMO_FILE_PATH, write_weekly_memo
 
 
-def log(message: str) -> None:
-    timestamp = local_now().strftime("%Y-%m-%d %H:%M:%S %Z")
-    print(f"[{timestamp}] {message}")
+def log(message: str, **fields: object) -> None:
+    info(message, **fields)
 
 
-def target_count_for_category(category: str) -> int:
+def target_count_for_category(category: str, *, config: AppConfig) -> int:
     if category == "Regulatory":
-        return REGULATORY_TARGET_ITEMS
-    return MAX_ITEMS_PER_CATEGORY
+        return config.regulatory_target_items
+    return config.max_items_per_category
 
 
 def normalize_digest_mode(mode: str) -> str:
@@ -52,7 +47,8 @@ def normalize_digest_mode(mode: str) -> str:
     return normalized
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(*, config: AppConfig | None = None) -> argparse.Namespace:
+    resolved = config or current_config()
     parser = argparse.ArgumentParser(description="Run Daily AI Digest.")
     parser.add_argument(
         "--dry-run",
@@ -62,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--digest-mode",
         choices=["daily", "weekly"],
-        default=DIGEST_MODE,
+        default=resolved.digest_mode,
         help="Render the scan-first daily email or the analysis-heavy weekly digest.",
     )
     parser.add_argument(
@@ -79,20 +75,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def save_artifacts(operator_brief: dict[str, object], html: str, cockpit_html: str) -> None:
-    log("Digest saved to latest_digest.html")
-    with open("latest_digest.html", "w", encoding="utf-8") as f:
-        f.write(html)
-    log(f"Operator brief saved to {OPERATOR_BRIEF_FILE_PATH}")
-    with open(OPERATOR_BRIEF_FILE_PATH, "w", encoding="utf-8") as f:
-        json.dump(operator_brief, f, indent=2)
-    log(f"Operator cockpit saved to {OPERATOR_COCKPIT_FILE_PATH}")
-    with open(OPERATOR_COCKPIT_FILE_PATH, "w", encoding="utf-8") as f:
-        f.write(cockpit_html)
+def save_artifacts(
+    operator_brief: dict[str, object],
+    html: str,
+    cockpit_html: str,
+    *,
+    config: AppConfig,
+) -> None:
+    Path("latest_digest.html").write_text(html, encoding="utf-8")
+    log("Digest artifact saved", path="latest_digest.html")
+    write_json_file(config.operator_brief_file_path, operator_brief)
+    log("Operator brief artifact saved", path=config.operator_brief_file_path)
+    Path(config.operator_cockpit_file_path).write_text(cockpit_html, encoding="utf-8")
+    log("Operator cockpit artifact saved", path=config.operator_cockpit_file_path)
 
 
 def log_json_event(label: str, payload: dict[str, object]) -> None:
-    log(f"{label}: {json.dumps(payload, sort_keys=True)}")
+    log(label, payload=json.dumps(payload, sort_keys=True))
 
 
 def log_selection_diagnostics(diagnostics: dict[str, object]) -> None:
@@ -105,22 +104,28 @@ def log_selection_diagnostics(diagnostics: dict[str, object]) -> None:
         log_json_event("No-signal fallback diagnostic", fallback)
 
 
-def run(*, dry_run: bool = False, digest_mode: str = DIGEST_MODE) -> None:
-    digest_mode = normalize_digest_mode(digest_mode)
-    memory = load_digest_memory()
+def run(
+    *,
+    dry_run: bool = False,
+    digest_mode: str | None = None,
+    config: AppConfig | None = None,
+) -> None:
+    resolved = config or current_config()
+    digest_mode = normalize_digest_mode(digest_mode or resolved.digest_mode)
+    memory = load_digest_memory(config=resolved)
 
     if dry_run:
         log("Dry run enabled: fetch and render will run, but email and state writes are disabled.")
 
     log("Fetching real items...")
-    items = get_real_items(memory)
+    items = get_real_items(memory, config=resolved)
 
     if not items:
         raise RuntimeError("No items fetched. Check feeds, API keys, or network.")
 
-    log(f"Fetched {len(items)} items.")
+    log("Fetched items", count=len(items))
     log("Summarizing items with OpenAI...")
-    enriched_items = summarize_items(items)
+    enriched_items = summarize_items(items, config=resolved)
     memory_snapshot = build_memory_snapshot(memory)
 
     section_counts = validate_digest_items(enriched_items)
@@ -131,7 +136,7 @@ def run(*, dry_run: bool = False, digest_mode: str = DIGEST_MODE) -> None:
         f"Regulatory={section_counts['Regulatory']}"
     )
     for category, count in section_counts.items():
-        target_count = target_count_for_category(category)
+        target_count = target_count_for_category(category, config=resolved)
         if count < target_count:
             log(
                 f"{category} section under target count: "
@@ -143,6 +148,7 @@ def run(*, dry_run: bool = False, digest_mode: str = DIGEST_MODE) -> None:
         enriched_items,
         memory=memory,
         memory_snapshot=memory_snapshot,
+        config=resolved,
     )
     log(
         "Operator brief built: "
@@ -160,11 +166,15 @@ def run(*, dry_run: bool = False, digest_mode: str = DIGEST_MODE) -> None:
     html = format_operator_brief_html(operator_brief, mode=digest_mode)
     cockpit_html = format_operator_cockpit_html(operator_brief)
 
-    subject_prefix = f"{EMAIL_SUBJECT_PREFIX.strip()} " if EMAIL_SUBJECT_PREFIX.strip() else ""
+    subject_prefix = (
+        f"{resolved.email_subject_prefix.strip()} "
+        if resolved.email_subject_prefix.strip()
+        else ""
+    )
     subject_label = "Weekly AI Digest" if digest_mode == "weekly" else "Daily AI Digest"
-    subject = f"{subject_prefix}{subject_label} - {local_now().strftime('%Y-%m-%d')}"
+    subject = f"{subject_prefix}{subject_label} - {local_now(config=resolved).strftime('%Y-%m-%d')}"
 
-    save_artifacts(operator_brief, html, cockpit_html)
+    save_artifacts(operator_brief, html, cockpit_html, config=resolved)
     write_selection_audit(operator_brief)
     log(f"Selection audit saved to {SELECTION_AUDIT_FILE_PATH}")
     log(f"Selection audit summary saved to {SELECTION_AUDIT_MARKDOWN_FILE_PATH}")
@@ -173,22 +183,24 @@ def run(*, dry_run: bool = False, digest_mode: str = DIGEST_MODE) -> None:
         log("Dry run complete. Local artifacts were written and no email or state updates were performed.")
         return
 
-    if already_sent_today():
+    if already_sent_today(config=resolved):
         log("Email already sent for the current local day. Skipping duplicate send.")
         return
 
     log("Sending email...")
-    send_email(subject, html)
-    mark_sent([item.get("item_key", "") for item in items])
-    record_digest_items(enriched_items)
-    record_operator_brief(operator_brief)
+    send_email(subject, html, config=resolved)
+    mark_sent([item.get("item_key", "") for item in items], config=resolved)
+    record_digest_items(enriched_items, config=resolved)
+    record_operator_brief(operator_brief, config=resolved)
 
     log("Done. Check your inbox.")
 
 if __name__ == "__main__":
-    args = parse_args()
+    configure_logging()
+    config = current_config()
+    args = parse_args(config=config)
     if args.weekly_memo:
         write_weekly_memo(lookback_days=args.weekly_lookback_days)
         log(f"Weekly operator memo saved to {WEEKLY_MEMO_FILE_PATH}")
     else:
-        run(dry_run=args.dry_run, digest_mode=args.digest_mode)
+        run(dry_run=args.dry_run, digest_mode=args.digest_mode, config=config)

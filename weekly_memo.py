@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from app_logging import configure_logging, info
 from config import OPERATOR_BRIEF_FILE_PATH
 from memory import DigestMemory, load_digest_memory
 from selection_audit import SELECTION_AUDIT_FILE_PATH
 from state import local_now
+from storage import read_json_file
 
 
 WEEKLY_MEMO_FILE_PATH = "latest_weekly_operator_memo.md"
@@ -98,15 +99,7 @@ GENERIC_THEME_LABELS = {
 
 
 def load_json_file(path: str) -> Dict[str, Any]:
-    file_path = Path(path)
-    if not file_path.exists():
-        return {}
-    try:
-        with file_path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
+    return read_json_file(path, {}, expected_type=dict)
 
 
 def parse_date(value: Any) -> date | None:
@@ -656,8 +649,7 @@ def write_weekly_memo(
         selection_audit=load_json_file(selection_audit_path),
         lookback_days=lookback_days,
     )
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(memo)
+    Path(output_path).write_text(memo, encoding="utf-8")
     return memo
 
 
@@ -678,6 +670,7 @@ def parse_args() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
+    configure_logging()
     args = parse_args()
     write_weekly_memo(output_path=args.output, lookback_days=args.lookback_days)
-    print(f"Weekly operator memo saved to {args.output}")
+    info("Weekly operator memo saved", path=args.output)

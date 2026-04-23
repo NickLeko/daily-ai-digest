@@ -1215,7 +1215,9 @@ class SignalQualityGateTests(unittest.TestCase):
         self.assertEqual(brief["summary"]["story_card_count"], 0)
         self.assertEqual(select_daily_stories(brief), [])
         self.assertIn("No strong signal today from 1 screened item.", html)
-        self.assertNotIn("HHS launches $4M KidneyX challenge", html)
+        self.assertIn("SCREENED BUT SKIPPED", html)
+        self.assertIn("HHS launches $4M KidneyX challenge", html)
+        self.assertEqual(len(brief["skipped_news_items"]), 1)
         self.assertEqual(brief["stories"][0]["confidence"], "Low")
 
     def test_daily_selection_records_single_story_collapse_reason(self) -> None:
@@ -1304,6 +1306,7 @@ class SignalQualityGateTests(unittest.TestCase):
         self.assertEqual(brief["summary"]["story_card_count"], 0)
         self.assertEqual(select_daily_stories(brief), [])
         self.assertEqual(len(brief["near_miss_items"]), 3)
+        self.assertEqual(len(brief["skipped_news_items"]), 3)
         self.assertIn("No strong signal today from 4 screened items.", html)
         self.assertIn("No operator-grade stories cleared today's quality bar.", html)
         self.assertLess(
@@ -1319,6 +1322,7 @@ class SignalQualityGateTests(unittest.TestCase):
         self.assertNotIn("health IT owners", html)
         self.assertNotIn("backlog review", html)
         self.assertNotIn("FHIR/API dependencies", html)
+        self.assertNotIn("SCREENED BUT SKIPPED", html)
 
     def test_realistic_daily_path_selects_policy_story_and_keeps_filler_out(self) -> None:
         now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
@@ -1440,10 +1444,127 @@ class SignalQualityGateTests(unittest.TestCase):
         self.assertIn("No strong signal today from 3 screened items.", html)
         self.assertNotIn("<strong>Summary:</strong>", html)
         self.assertNotIn("WORTH A QUICK GLANCE", html)
+        self.assertIn("SCREENED BUT SKIPPED", html)
+        self.assertGreaterEqual(len(brief["skipped_news_items"]), 1)
+        self.assertEqual(
+            html.count("Skipped because"),
+            len(brief["skipped_news_items"]),
+        )
+        self.assertIn(
+            "it was still an early announcement without concrete deployment or workflow evidence",
+            html,
+        )
         self.assertEqual(
             diagnostics["no_signal_fallback"]["reason_code"],
             "no_story_cards_passed_admission",
         )
+        self.assertEqual(diagnostics["no_signal_fallback"]["fallback_source"], "skipped_news")
+        self.assertEqual(
+            diagnostics["no_signal_fallback"]["fallback_rendered_count"],
+            len(brief["skipped_news_items"]),
+        )
+
+    def test_no_signal_day_uses_skipped_news_when_near_misses_are_empty(self) -> None:
+        skipped_items = [
+            {
+                **self.decent_near_miss_item(
+                    "news::ambient-outreach",
+                    "Ambient outreach assistant pilot lacks deployment proof",
+                    priority_score=19.0,
+                    summary="A vendor described an ambient outreach assistant pilot without live customer deployment proof.",
+                ),
+                "operator_relevance": "low",
+                "near_term_actionability": "low",
+                "workflow_wedges": [],
+            },
+            {
+                **self.decent_near_miss_item(
+                    "news::referral-routing",
+                    "Referral routing copilot demo lacks operator fit",
+                    priority_score=18.0,
+                    summary="A referral routing copilot demo described the concept without concrete workflow owners or deployment evidence.",
+                ),
+                "operator_relevance": "low",
+                "near_term_actionability": "low",
+                "workflow_wedges": [],
+            },
+            {
+                **self.decent_near_miss_item(
+                    "news::coding-review",
+                    "Coding review assistant pitch stays abstract",
+                    priority_score=17.0,
+                    summary="A coding review assistant pitch stayed abstract and did not show real backlog or throughput impact.",
+                ),
+                "operator_relevance": "low",
+                "near_term_actionability": "low",
+                "workflow_wedges": [],
+            },
+            {
+                **self.decent_near_miss_item(
+                    "news::portal-bot",
+                    "Portal bot concept lacks workflow owner",
+                    priority_score=16.0,
+                    summary="A portal bot concept described possible automation without clear workflow ownership or production evidence.",
+                ),
+                "operator_relevance": "low",
+                "near_term_actionability": "low",
+                "workflow_wedges": [],
+            },
+        ]
+        brief = build_operator_brief_artifact(
+            skipped_items,
+            memory={"version": 2, "events": [], "daily_briefs": []},
+            memory_snapshot={},
+        )
+        html = format_operator_brief_html(brief)
+        diagnostics = build_selection_diagnostics(brief, mode="daily")
+
+        self.assertEqual(brief["summary"]["story_card_count"], 0)
+        self.assertEqual(select_daily_stories(brief), [])
+        self.assertEqual(len(brief["near_miss_items"]), 0)
+        self.assertEqual(len(brief["skipped_news_items"]), 3)
+        self.assertIn("SCREENED BUT SKIPPED", html)
+        self.assertNotIn("WORTH A QUICK GLANCE", html)
+        self.assertIn("Ambient outreach assistant pilot lacks deployment proof", html)
+        self.assertIn("Skipped because operator fit was too indirect", html)
+        self.assertEqual(html.count("Skipped because"), 3)
+        self.assertEqual(diagnostics["no_signal_fallback"]["fallback_source"], "skipped_news")
+        self.assertEqual(diagnostics["no_signal_fallback"]["fallback_rendered_count"], 3)
+
+    def test_skipped_news_section_stays_hidden_when_no_clean_summary_survives(self) -> None:
+        item = {
+            **self.decent_near_miss_item(
+                "news::unclear-briefing",
+                "Trade note lacks usable summary line",
+                priority_score=14.0,
+                summary="",
+            ),
+            "raw_text": (
+                "Integration leads and health IT owners should use the next backlog review "
+                "to inventory FHIR/API dependencies and brittle handoffs."
+            ),
+            "summary": "",
+            "operator_relevance": "low",
+            "near_term_actionability": "low",
+            "workflow_wedges": [],
+        }
+        brief = build_operator_brief_artifact(
+            [item],
+            memory={"version": 2, "events": [], "daily_briefs": []},
+            memory_snapshot={},
+        )
+        html = format_operator_brief_html(brief)
+        diagnostics = build_selection_diagnostics(brief, mode="daily")
+
+        self.assertEqual(brief["summary"]["story_card_count"], 0)
+        self.assertEqual(select_daily_stories(brief), [])
+        self.assertEqual(brief["near_miss_items"], [])
+        self.assertEqual(brief["skipped_news_items"], [])
+        self.assertNotIn("WORTH A QUICK GLANCE", html)
+        self.assertNotIn("SCREENED BUT SKIPPED", html)
+        self.assertEqual(diagnostics["no_signal_fallback"]["fallback_source"], "none")
+        self.assertEqual(diagnostics["no_signal_fallback"]["fallback_candidate_count"], 0)
+        self.assertEqual(diagnostics["no_signal_fallback"]["fallback_rendered_count"], 0)
 
     def test_real_bad_output_fixtures_do_not_surface(self) -> None:
         now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)

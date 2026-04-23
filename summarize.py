@@ -1,156 +1,18 @@
 import json
 import re
-from typing import Dict, List
+import sys
+from typing import Any, Dict, List
 
-from openai import OpenAI
-
-from config import OPENAI_API_KEY, OPENAI_MODEL, PRIORITY_THEME_RULES
+from config import AppConfig, OPENAI_MODEL
+from services import get_openai_client
 from signal_quality import classify_mapping_materiality
-
-
-client = OpenAI(api_key=OPENAI_API_KEY)
-
-WORKFLOW_KEYWORD_RULES = {
-    "prior auth": [
-        "prior authorization",
-        "prior auth",
-        "utilization management",
-        "utilization review",
-    ],
-    "referral/intake": [
-        "referral",
-        "referrals",
-        "intake",
-        "eligibility",
-        "benefits verification",
-    ],
-    "documentation/ambient": [
-        "documentation",
-        "ambient",
-        "scribe",
-        "charting",
-        "clinical note",
-    ],
-    "scheduling": [
-        "scheduling",
-        "appointment",
-        "patient access",
-        "reschedule",
-    ],
-    "RCM/denials": [
-        "revenue cycle",
-        "rcm",
-        "claims",
-        "claims attachments",
-        "denials",
-        "denial",
-        "appeals",
-        "billing",
-        "reimbursement",
-    ],
-    "interoperability": [
-        "interoperability",
-        "fhir",
-        "hl7",
-        "tefca",
-        "uscdi",
-        "api",
-        "ehr",
-        "epic",
-        "cerner",
-    ],
-    "provider/admin ops": [
-        "contact center",
-        "call center",
-        "operations",
-        "back office",
-        "forms",
-        "fax",
-        "workflow automation",
-    ],
-    "care coordination": [
-        "care coordination",
-        "case management",
-        "transition of care",
-        "discharge",
-        "follow-up",
-    ],
-}
-
-WORKFLOW_OPERATOR_GUIDANCE = {
-    "prior auth": {
-        "workflow": "prior auth and utilization management",
-        "audience": "payer and provider ops leaders",
-        "focus": "interoperable attachment exchange and audit-ready automation",
-        "action": "rank bets by denial reduction, status visibility, and payer handoff quality",
-        "build_idea": "Prototype a prior-auth assistant that packages documentation, attachments, and denial-prep into one handoff.",
-        "content_angle": "Why prior-auth workflow ROI beats generic agent demos.",
-        "interview_talking_point": "Explain how you would prioritize prior-auth automation by denial lift, turnaround time, and auditability.",
-    },
-    "referral/intake": {
-        "workflow": "referral and intake",
-        "audience": "access and care-coordination teams",
-        "focus": "intake completeness and referral routing",
-        "action": "prioritize products that cut manual intake, missing documentation, and referral leakage",
-        "build_idea": "Prototype an intake copilot that flags missing documents and routes referrals before staff touch them.",
-        "content_angle": "Referral leakage is a better automation wedge than another generic copilot.",
-        "interview_talking_point": "Describe how you would measure automation value in intake completeness and referral conversion.",
-    },
-    "documentation/ambient": {
-        "workflow": "documentation and ambient capture",
-        "audience": "provider ops leaders",
-        "focus": "note capture that survives compliance review",
-        "action": "prioritize tools tied to note throughput, auditability, and cleaner downstream handoffs",
-        "build_idea": "Prototype an ambient handoff assistant that turns visit context into structured follow-up work.",
-        "content_angle": "Ambient AI wins when it improves downstream ops, not just note drafting.",
-        "interview_talking_point": "Talk about documentation tools in terms of throughput, compliance risk, and handoff quality.",
-    },
-    "scheduling": {
-        "workflow": "scheduling and patient access",
-        "audience": "access-center leaders",
-        "focus": "capacity management and fewer reschedules",
-        "action": "prioritize tools that improve fill rate, template utilization, and manual reschedule load",
-        "build_idea": "Prototype a scheduling copilot that surfaces open capacity and prevents avoidable reschedules.",
-        "content_angle": "Scheduling automation is a real buyer wedge because the metrics are immediate.",
-        "interview_talking_point": "Frame scheduling AI around fill rate, template utilization, and manual touch reduction.",
-    },
-    "RCM/denials": {
-        "workflow": "revenue cycle and denials",
-        "audience": "RCM and denials teams",
-        "focus": "denial prevention and appeal prep",
-        "action": "prioritize products tied to recoveries, write-offs, and turnaround time instead of abstract autonomy",
-        "build_idea": "Prototype a denial-worklist assistant that summarizes evidence, appeal steps, and next actions.",
-        "content_angle": "RCM buyers care about recoveries and turnaround, not generic AI orchestration.",
-        "interview_talking_point": "Explain how you would rank denials automation by recovery rate, cycle time, and auditability.",
-    },
-    "interoperability": {
-        "workflow": "interoperability and data exchange",
-        "audience": "health IT and integration owners",
-        "focus": "standards-based exchange instead of custom point integrations",
-        "action": "prioritize roadmap work around FHIR, APIs, and auditability before another generic agent experiment",
-        "build_idea": "Prototype an interoperability layer that packages the minimum payload and audit trail for a high-friction workflow.",
-        "content_angle": "The next wedge is boring on purpose: standards, payload quality, and audit trails.",
-        "interview_talking_point": "Discuss interoperability bets in terms of integration burden, auditability, and time-to-deployment.",
-    },
-    "provider/admin ops": {
-        "workflow": "provider and admin operations",
-        "audience": "ops leaders",
-        "focus": "manual inbox, forms, and contact-center handoffs",
-        "action": "prioritize tools that compress manual work and handoff delay in the next planning cycle",
-        "build_idea": "Prototype a back-office assistant that triages forms, inbox items, and the next required handoff.",
-        "content_angle": "Admin ops is where AI can prove value without pretending to replace whole teams.",
-        "interview_talking_point": "Talk about provider-ops AI in terms of touch reduction, handoff quality, and operational lift.",
-    },
-    "care coordination": {
-        "workflow": "care coordination",
-        "audience": "care management and referral teams",
-        "focus": "referral closure and transition tracking",
-        "action": "prioritize systems that reduce leakage, missed follow-ups, and manual outreach gaps",
-        "build_idea": "Prototype a care-coordination assistant that tracks missing follow-ups and closes referral loops.",
-        "content_angle": "Care coordination automation is valuable when it closes loops, not when it adds another inbox.",
-        "interview_talking_point": "Frame care-coordination AI around referral closure, follow-up completion, and fewer dropped transitions.",
-    },
-}
+from taxonomy import (
+    DEFAULT_WORKFLOW_LABEL,
+    WORKFLOW_LABEL_KEYWORDS,
+    theme_labels as taxonomy_theme_labels,
+    workflow_actions_for_label,
+    workflow_guidance_for_label,
+)
 
 GENERIC_TOP_INSIGHT_PHRASES = [
     "accelerate automation",
@@ -259,56 +121,34 @@ DETAIL_TOKEN_STOPWORDS = {
     "work",
 }
 
-WORKFLOW_SPECIFIC_ACTIONS = {
-    "prior auth": {
-        "actors": "prior-auth managers, denials leads, and integration owners",
-        "repo_action": "reduce documentation assembly, payer rules lookup, and status chasing",
-        "news_action": "audit where evidence packets, payer rules, or status updates still break the workflow",
-        "regulatory_action": "map attachment, signature, and audit-trail gaps",
-    },
-    "referral/intake": {
-        "actors": "access directors, intake supervisors, and referral owners",
-        "repo_action": "cut missing-document rework, manual routing, and referral leakage",
-        "news_action": "review intake completeness, routing errors, and time-to-scheduled-visit",
-        "regulatory_action": "check intake data capture and referral-routing controls",
-    },
-    "documentation/ambient": {
-        "actors": "clinical informatics leads and provider-ops owners",
-        "repo_action": "turn visit context into usable downstream tasks instead of another note layer",
-        "news_action": "check whether note capture improves coding, follow-up, or inbox handoffs",
-        "regulatory_action": "review clinician review, retention, and downstream audit controls",
-    },
-    "scheduling": {
-        "actors": "access-center managers and patient-access owners",
-        "repo_action": "improve fill rate, template utilization, and reschedule recovery",
-        "news_action": "review hold times, open capacity, and preventable reschedules",
-        "regulatory_action": "check whether scheduling data capture or reporting obligations changed",
-    },
-    "RCM/denials": {
-        "actors": "RCM directors, denials leads, and appeals managers",
-        "repo_action": "speed evidence retrieval, denial triage, and appeal prep",
-        "news_action": "review avoidable denials, write-offs, and queue turnaround",
-        "regulatory_action": "map policy changes to claims, attachments, and appeal workflows",
-    },
-    "interoperability": {
-        "actors": "integration leads and health IT owners",
-        "repo_action": "reduce custom interface work while preserving an audit trail",
-        "news_action": "inventory FHIR/API dependencies and brittle handoffs on active roadmap work",
-        "regulatory_action": "map API, payload, and audit-trail gaps before trading-partner work starts",
-    },
-    "provider/admin ops": {
-        "actors": "ops managers and back-office leads",
-        "repo_action": "shrink inbox, forms, or contact-center handoffs on a live queue",
-        "news_action": "review which back-office queues still depend on manual triage and status chasing",
-        "regulatory_action": "check whether reporting, forms handling, or audit obligations changed",
-    },
-    "care coordination": {
-        "actors": "care-management leads and referral owners",
-        "repo_action": "close referral loops and follow-up gaps instead of creating another task list",
-        "news_action": "review dropped transitions, missed follow-ups, and outreach backlog",
-        "regulatory_action": "map documentation or reporting changes to discharge and follow-up workflows",
-    },
-}
+
+class _LegacyResponsesProxy:
+    def create(self, *args: Any, **kwargs: Any) -> Any:
+        if _running_under_unittest_runner():
+            raise RuntimeError("Live OpenAI calls are disabled during unit tests.")
+        return get_openai_client().responses.create(*args, **kwargs)
+
+
+class _LegacyClientProxy:
+    def __init__(self) -> None:
+        self.responses = _LegacyResponsesProxy()
+
+
+# Compatibility shim for existing tests and patch targets. This remains lazy:
+# the real OpenAI client is only created if the proxy method is actually called.
+client = _LegacyClientProxy()
+
+
+def _running_under_unittest_runner() -> bool:
+    main_module = sys.modules.get("__main__")
+    main_package = str(getattr(main_module, "__package__", "") or "")
+    main_file = str(getattr(main_module, "__file__", "") or "").replace("\\", "/")
+    argv0 = str(sys.argv[0] if sys.argv else "").replace("\\", "/")
+    return (
+        main_package == "unittest"
+        or "/unittest/" in main_file
+        or "/unittest/" in argv0
+    )
 
 
 def parse_json_payload(text: str) -> Dict[str, str] | None:
@@ -343,10 +183,7 @@ def parse_json_payload(text: str) -> Dict[str, str] | None:
 
 
 def theme_labels(theme_keys: List[str]) -> List[str]:
-    return [
-        PRIORITY_THEME_RULES.get(theme_key, {}).get("label", theme_key)
-        for theme_key in theme_keys
-    ]
+    return taxonomy_theme_labels(theme_keys)
 
 
 def item_text_blob(item: Dict[str, object]) -> str:
@@ -376,7 +213,7 @@ def infer_workflow_wedges(item: Dict[str, object]) -> List[str]:
 
     text = item_text_blob(item).lower()
     matched = []
-    for label, keywords in WORKFLOW_KEYWORD_RULES.items():
+    for label, keywords in WORKFLOW_LABEL_KEYWORDS.items():
         if any(keyword in text for keyword in keywords):
             matched.append(label)
     return matched
@@ -384,22 +221,12 @@ def infer_workflow_wedges(item: Dict[str, object]) -> List[str]:
 
 def workflow_guidance_for_item(item: Dict[str, object]) -> Dict[str, str]:
     wedges = infer_workflow_wedges(item)
-    if wedges:
-        return WORKFLOW_OPERATOR_GUIDANCE.get(
-            wedges[0],
-            WORKFLOW_OPERATOR_GUIDANCE["provider/admin ops"],
-        )
-    return WORKFLOW_OPERATOR_GUIDANCE["provider/admin ops"]
+    return workflow_guidance_for_label(wedges[0] if wedges else DEFAULT_WORKFLOW_LABEL)
 
 
 def workflow_actions_for_item(item: Dict[str, object]) -> Dict[str, str]:
     wedges = infer_workflow_wedges(item)
-    if wedges:
-        return WORKFLOW_SPECIFIC_ACTIONS.get(
-            wedges[0],
-            WORKFLOW_SPECIFIC_ACTIONS["provider/admin ops"],
-        )
-    return WORKFLOW_SPECIFIC_ACTIONS["provider/admin ops"]
+    return workflow_actions_for_label(wedges[0] if wedges else DEFAULT_WORKFLOW_LABEL)
 
 
 def sentence_start(text: str) -> str:
@@ -691,7 +518,35 @@ def item_prompt_context(item: Dict[str, object]) -> str:
     )
 
 
-def summarize_item(item: Dict[str, object]) -> Dict[str, str]:
+def model_response_text(
+    prompt: str,
+    *,
+    config: AppConfig | None = None,
+    openai_client: Any | None = None,
+) -> str:
+    model_name = config.openai_model if config is not None else OPENAI_MODEL
+    try:
+        if openai_client is not None:
+            response_client = openai_client
+        elif config is not None:
+            response_client = get_openai_client(config)
+        else:
+            response_client = client
+        response = response_client.responses.create(
+            model=model_name,
+            input=prompt,
+        )
+    except Exception:
+        return ""
+    return str(getattr(response, "output_text", "") or "").strip()
+
+
+def summarize_item(
+    item: Dict[str, object],
+    *,
+    config: AppConfig | None = None,
+    openai_client: Any | None = None,
+) -> Dict[str, str]:
     category_specific_rule = ""
     if item["category"] == "Regulatory":
         category_specific_rule = (
@@ -748,15 +603,7 @@ Additional category rule:
 {category_specific_rule}
 """.strip()
 
-    text = ""
-    try:
-        response = client.responses.create(
-            model=OPENAI_MODEL,
-            input=prompt,
-        )
-        text = response.output_text.strip()
-    except Exception:
-        text = ""
+    text = model_response_text(prompt, config=config, openai_client=openai_client)
 
     try:
         parsed = parse_json_payload(text)
@@ -795,8 +642,16 @@ Additional category rule:
     }
 
 
-def summarize_items(items: List[Dict[str, object]]) -> List[Dict[str, str]]:
-    return [summarize_item(item) for item in items]
+def summarize_items(
+    items: List[Dict[str, object]],
+    *,
+    config: AppConfig | None = None,
+    openai_client: Any | None = None,
+) -> List[Dict[str, str]]:
+    return [
+        summarize_item(item, config=config, openai_client=openai_client)
+        for item in items
+    ]
 
 
 def fallback_digest_strategy(items: List[Dict[str, object]]) -> Dict[str, str]:
@@ -834,6 +689,9 @@ def fallback_digest_strategy(items: List[Dict[str, object]]) -> Dict[str, str]:
 def summarize_digest_strategy(
     items: List[Dict[str, object]],
     memory_snapshot: Dict[str, object] | None = None,
+    *,
+    config: AppConfig | None = None,
+    openai_client: Any | None = None,
 ) -> Dict[str, str]:
     compact_items = []
     for item in items:
@@ -887,15 +745,7 @@ Rules:
 - Empty strings are allowed if evidence is weak, but prefer useful specificity
 """.strip()
 
-    text = ""
-    try:
-        response = client.responses.create(
-            model=OPENAI_MODEL,
-            input=prompt,
-        )
-        text = response.output_text.strip()
-    except Exception:
-        text = ""
+    text = model_response_text(prompt, config=config, openai_client=openai_client)
 
     fallback = fallback_digest_strategy(items)
 

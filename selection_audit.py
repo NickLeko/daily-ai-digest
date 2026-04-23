@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 from collections import Counter
+from pathlib import Path
 from typing import Any, Dict, List
 
 from formatter import (
@@ -20,6 +20,7 @@ from operator_brief import (
 )
 from selection_policy import DAILY_STORY_LIMIT, confidence_display_for_story
 from state import local_now
+from storage import write_json_file
 
 
 SELECTION_AUDIT_FILE_PATH = "latest_selection_audit.json"
@@ -403,6 +404,16 @@ def build_selection_audit(operator_brief: Dict[str, Any]) -> Dict[str, Any]:
         operator_brief,
         story_limit=DAILY_STORY_LIMIT,
     )
+    near_miss_items = [
+        item
+        for item in (operator_brief.get("near_miss_items", []) or [])
+        if isinstance(item, dict)
+    ]
+    skipped_news_items = [
+        item
+        for item in (operator_brief.get("skipped_news_items", []) or [])
+        if isinstance(item, dict)
+    ]
     return {
         "version": 1,
         "generated_at": local_now().isoformat(),
@@ -421,6 +432,10 @@ def build_selection_audit(operator_brief: Dict[str, Any]) -> Dict[str, Any]:
             "daily_selection": {
                 "collapse_reason": daily_selection.get("collapse_reason", {}),
                 "selection_counts": daily_selection.get("selection_counts", {}),
+            },
+            "fallback_candidates": {
+                "near_miss_candidate_count": len(near_miss_items),
+                "skipped_news_candidate_count": len(skipped_news_items),
             },
         },
         "stories": story_rows,
@@ -446,11 +461,26 @@ def no_signal_fallback_diagnostic(audit: Dict[str, Any]) -> Dict[str, Any]:
     summary = audit.get("summary", {}) or {}
     daily_selection = summary.get("daily_selection", {}) or {}
     collapse_reason = daily_selection.get("collapse_reason", {}) or {}
+    fallback_candidates = summary.get("fallback_candidates", {}) or {}
+    near_miss_candidate_count = int(fallback_candidates.get("near_miss_candidate_count", 0) or 0)
+    skipped_news_candidate_count = int(fallback_candidates.get("skipped_news_candidate_count", 0) or 0)
     daily_selected = [
         row
         for row in stories
         if (row.get("shorter_digest_selection", {}) or {}).get("selected")
     ]
+    fallback_source = "none"
+    fallback_candidate_count = 0
+    fallback_rendered_count = 0
+    if near_miss_candidate_count > 0:
+        fallback_source = "near_miss"
+        fallback_candidate_count = near_miss_candidate_count
+        fallback_rendered_count = near_miss_candidate_count
+    elif skipped_news_candidate_count > 0:
+        fallback_source = "skipped_news"
+        fallback_candidate_count = skipped_news_candidate_count
+        fallback_rendered_count = skipped_news_candidate_count
+
     if daily_selected:
         return {
             "triggered": False,
@@ -459,6 +489,11 @@ def no_signal_fallback_diagnostic(audit: Dict[str, Any]) -> Dict[str, Any]:
             "story_count": len(stories),
             "story_card_count": int((audit.get("summary", {}) or {}).get("story_card_count", 0) or 0),
             "collapse_reason": collapse_reason,
+            "fallback_source": "none",
+            "near_miss_candidate_count": near_miss_candidate_count,
+            "skipped_news_candidate_count": skipped_news_candidate_count,
+            "fallback_candidate_count": 0,
+            "fallback_rendered_count": 0,
         }
 
     screened_item_count = int((audit.get("summary", {}) or {}).get("raw_item_count", 0) or 0)
@@ -493,6 +528,11 @@ def no_signal_fallback_diagnostic(audit: Dict[str, Any]) -> Dict[str, Any]:
         "screened_item_count": screened_item_count,
         "story_count": len(stories),
         "story_card_count": story_card_count,
+        "fallback_source": fallback_source,
+        "near_miss_candidate_count": near_miss_candidate_count,
+        "skipped_news_candidate_count": skipped_news_candidate_count,
+        "fallback_candidate_count": fallback_candidate_count,
+        "fallback_rendered_count": fallback_rendered_count,
         "filtered_reason_counts": reason_counts(filtered, key="primary_reason"),
         "daily_filter_reason_counts": daily_reason_counts(daily_filtered),
     }
@@ -760,8 +800,6 @@ def write_selection_audit(
     markdown_path: str = SELECTION_AUDIT_MARKDOWN_FILE_PATH,
 ) -> Dict[str, Any]:
     audit = build_selection_audit(operator_brief)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(audit, f, indent=2)
-    with open(markdown_path, "w", encoding="utf-8") as f:
-        f.write(render_selection_audit_markdown(audit))
+    write_json_file(path, audit)
+    Path(markdown_path).write_text(render_selection_audit_markdown(audit), encoding="utf-8")
     return audit

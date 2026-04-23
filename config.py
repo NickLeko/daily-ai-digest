@@ -1,140 +1,292 @@
+from __future__ import annotations
+
 import os
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import Mapping
+
 from dotenv import load_dotenv
+
+from taxonomy import PRIORITY_THEME_RULES, TRACKED_ENTITY_RULES
 
 
 load_dotenv()
 
 
-DEFAULT_NEWS_FEED_URLS = [
+DEFAULT_NEWS_FEED_URLS = (
     "https://www.healthcareitnews.com/home/feed",
     "https://www.mobihealthnews.com/rss.xml",
-]
+)
 
 
-def get_env(name: str, required: bool = True, default: str | None = None) -> str:
-    value = os.getenv(name)
+def get_env(
+    name: str,
+    *,
+    env: Mapping[str, str] | None = None,
+    required: bool = False,
+    default: str | None = None,
+) -> str:
+    source = env if env is not None else os.environ
+    value = source.get(name)
     if value is None or not str(value).strip():
         value = default
     if required and not value:
         raise ValueError(f"Missing required environment variable: {name}")
-    return value or ""
+    return str(value or "")
 
 
-def get_env_bool(name: str, default: bool = False) -> bool:
+def get_env_bool(
+    name: str,
+    *,
+    env: Mapping[str, str] | None = None,
+    default: bool = False,
+) -> bool:
     raw_value = get_env(
         name,
+        env=env,
         required=False,
         default="true" if default else "false",
     )
     return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-OPENAI_API_KEY = get_env("OPENAI_API_KEY")
-OPENAI_MODEL = get_env("OPENAI_MODEL", required=False, default="gpt-4.1-mini")
-DIGEST_ANALYST_AGENT_ENABLED = get_env_bool(
-    "DIGEST_ANALYST_AGENT_ENABLED",
-    default=True,
-)
-DIGEST_ANALYST_AGENT_MODEL = get_env(
-    "DIGEST_ANALYST_AGENT_MODEL",
-    required=False,
-    default=OPENAI_MODEL,
-)
-DIGEST_ANALYST_AGENT_TIMEOUT_SECONDS = int(
-    get_env(
-        "DIGEST_ANALYST_AGENT_TIMEOUT_SECONDS",
+def get_env_int(
+    name: str,
+    *,
+    env: Mapping[str, str] | None = None,
+    default: int,
+) -> int:
+    raw_value = get_env(name, env=env, required=False, default=str(default))
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"Environment variable {name} must be an integer, got {raw_value!r}.") from exc
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    openai_api_key: str
+    openai_model: str
+    digest_analyst_agent_enabled: bool
+    digest_analyst_agent_model: str
+    digest_analyst_agent_timeout_seconds: int
+    gmail_address: str
+    gmail_app_password: str
+    to_email: str
+    email_subject_prefix: str
+    digest_mode: str
+    github_token: str
+    news_feed_urls: tuple[str, ...]
+    max_items_per_category: int
+    regulatory_target_items: int
+    local_timezone: str
+    state_file_path: str
+    digest_memory_file_path: str
+    source_policy_file_path: str
+    theses_file_path: str
+    market_map_file_path: str
+    github_watchlist_file_path: str
+    operator_brief_file_path: str
+    operator_cockpit_file_path: str
+    history_max_events: int
+    history_repeat_window_days: int
+    history_context_window_days: int
+    brief_history_max_days: int
+    operator_story_limit: int
+    watchlist_story_limit: int
+
+
+def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
+    openai_model = get_env(
+        "OPENAI_MODEL",
+        env=env,
         required=False,
-        default="20",
+        default="gpt-4.1-mini",
     )
-)
-
-GMAIL_ADDRESS = get_env("GMAIL_ADDRESS", required=False, default="")
-GMAIL_APP_PASSWORD = get_env("GMAIL_APP_PASSWORD", required=False, default="")
-TO_EMAIL = get_env("TO_EMAIL", required=False, default="")
-EMAIL_SUBJECT_PREFIX = get_env(
-    "EMAIL_SUBJECT_PREFIX", required=False, default=""
-)
-DIGEST_MODE = get_env(
-    "DIGEST_MODE", required=False, default="daily"
-).strip().lower()
-
-GITHUB_TOKEN = get_env("GITHUB_TOKEN", required=False, default="")
-NEWS_FEED_URLS = [
-    url.strip()
-    for url in get_env(
-        "NEWS_FEED_URLS",
+    digest_mode = get_env(
+        "DIGEST_MODE",
+        env=env,
         required=False,
-        default=",".join(DEFAULT_NEWS_FEED_URLS),
-    ).split(",")
-    if url.strip()
-]
+        default="daily",
+    ).strip().lower()
+    news_feed_urls = tuple(
+        url.strip()
+        for url in get_env(
+            "NEWS_FEED_URLS",
+            env=env,
+            required=False,
+            default=",".join(DEFAULT_NEWS_FEED_URLS),
+        ).split(",")
+        if url.strip()
+    )
 
-MAX_ITEMS_PER_CATEGORY = int(
-    get_env("MAX_ITEMS_PER_CATEGORY", required=False, default="3")
-)
-REGULATORY_TARGET_ITEMS = int(
-    get_env("REGULATORY_TARGET_ITEMS", required=False, default="2")
-)
+    return AppConfig(
+        openai_api_key=get_env("OPENAI_API_KEY", env=env, required=False, default=""),
+        openai_model=openai_model,
+        digest_analyst_agent_enabled=get_env_bool(
+            "DIGEST_ANALYST_AGENT_ENABLED",
+            env=env,
+            default=True,
+        ),
+        digest_analyst_agent_model=get_env(
+            "DIGEST_ANALYST_AGENT_MODEL",
+            env=env,
+            required=False,
+            default=openai_model,
+        ),
+        digest_analyst_agent_timeout_seconds=get_env_int(
+            "DIGEST_ANALYST_AGENT_TIMEOUT_SECONDS",
+            env=env,
+            default=20,
+        ),
+        gmail_address=get_env("GMAIL_ADDRESS", env=env, required=False, default=""),
+        gmail_app_password=get_env("GMAIL_APP_PASSWORD", env=env, required=False, default=""),
+        to_email=get_env("TO_EMAIL", env=env, required=False, default=""),
+        email_subject_prefix=get_env(
+            "EMAIL_SUBJECT_PREFIX",
+            env=env,
+            required=False,
+            default="",
+        ),
+        digest_mode=digest_mode,
+        github_token=get_env("GITHUB_TOKEN", env=env, required=False, default=""),
+        news_feed_urls=news_feed_urls,
+        max_items_per_category=get_env_int(
+            "MAX_ITEMS_PER_CATEGORY",
+            env=env,
+            default=3,
+        ),
+        regulatory_target_items=get_env_int(
+            "REGULATORY_TARGET_ITEMS",
+            env=env,
+            default=2,
+        ),
+        local_timezone=get_env(
+            "LOCAL_TIMEZONE",
+            env=env,
+            required=False,
+            default="America/Los_Angeles",
+        ),
+        state_file_path=get_env(
+            "STATE_FILE_PATH",
+            env=env,
+            required=False,
+            default="data/state/digest_state.json",
+        ),
+        digest_memory_file_path=get_env(
+            "DIGEST_MEMORY_FILE_PATH",
+            env=env,
+            required=False,
+            default="data/state/digest_memory.json",
+        ),
+        source_policy_file_path=get_env(
+            "SOURCE_POLICY_FILE_PATH",
+            env=env,
+            required=False,
+            default="data/source_policies.json",
+        ),
+        theses_file_path=get_env(
+            "THESES_FILE_PATH",
+            env=env,
+            required=False,
+            default="data/theses.json",
+        ),
+        market_map_file_path=get_env(
+            "MARKET_MAP_FILE_PATH",
+            env=env,
+            required=False,
+            default="data/market_map.json",
+        ),
+        github_watchlist_file_path=get_env(
+            "GITHUB_WATCHLIST_FILE_PATH",
+            env=env,
+            required=False,
+            default="data/github_watchlist.json",
+        ),
+        operator_brief_file_path=get_env(
+            "OPERATOR_BRIEF_FILE_PATH",
+            env=env,
+            required=False,
+            default="latest_operator_brief.json",
+        ),
+        operator_cockpit_file_path=get_env(
+            "OPERATOR_COCKPIT_FILE_PATH",
+            env=env,
+            required=False,
+            default="latest_operator_cockpit.html",
+        ),
+        history_max_events=get_env_int(
+            "HISTORY_MAX_EVENTS",
+            env=env,
+            default=1500,
+        ),
+        history_repeat_window_days=get_env_int(
+            "HISTORY_REPEAT_WINDOW_DAYS",
+            env=env,
+            default=14,
+        ),
+        history_context_window_days=get_env_int(
+            "HISTORY_CONTEXT_WINDOW_DAYS",
+            env=env,
+            default=21,
+        ),
+        brief_history_max_days=get_env_int(
+            "BRIEF_HISTORY_MAX_DAYS",
+            env=env,
+            default=45,
+        ),
+        operator_story_limit=get_env_int(
+            "OPERATOR_STORY_LIMIT",
+            env=env,
+            default=6,
+        ),
+        watchlist_story_limit=get_env_int(
+            "WATCHLIST_STORY_LIMIT",
+            env=env,
+            default=3,
+        ),
+    )
 
-LOCAL_TIMEZONE = get_env(
-    "LOCAL_TIMEZONE", required=False, default="America/Los_Angeles"
-)
-STATE_FILE_PATH = get_env(
-    "STATE_FILE_PATH", required=False, default="data/state/digest_state.json"
-)
-DIGEST_MEMORY_FILE_PATH = get_env(
-    "DIGEST_MEMORY_FILE_PATH",
-    required=False,
-    default="data/state/digest_memory.json",
-)
-SOURCE_POLICY_FILE_PATH = get_env(
-    "SOURCE_POLICY_FILE_PATH",
-    required=False,
-    default="data/source_policies.json",
-)
-THESES_FILE_PATH = get_env(
-    "THESES_FILE_PATH",
-    required=False,
-    default="data/theses.json",
-)
-MARKET_MAP_FILE_PATH = get_env(
-    "MARKET_MAP_FILE_PATH",
-    required=False,
-    default="data/market_map.json",
-)
-GITHUB_WATCHLIST_FILE_PATH = get_env(
-    "GITHUB_WATCHLIST_FILE_PATH",
-    required=False,
-    default="data/github_watchlist.json",
-)
-OPERATOR_BRIEF_FILE_PATH = get_env(
-    "OPERATOR_BRIEF_FILE_PATH",
-    required=False,
-    default="latest_operator_brief.json",
-)
-OPERATOR_COCKPIT_FILE_PATH = get_env(
-    "OPERATOR_COCKPIT_FILE_PATH",
-    required=False,
-    default="latest_operator_cockpit.html",
-)
-HISTORY_MAX_EVENTS = int(
-    get_env("HISTORY_MAX_EVENTS", required=False, default="1500")
-)
-HISTORY_REPEAT_WINDOW_DAYS = int(
-    get_env("HISTORY_REPEAT_WINDOW_DAYS", required=False, default="14")
-)
-HISTORY_CONTEXT_WINDOW_DAYS = int(
-    get_env("HISTORY_CONTEXT_WINDOW_DAYS", required=False, default="21")
-)
-BRIEF_HISTORY_MAX_DAYS = int(
-    get_env("BRIEF_HISTORY_MAX_DAYS", required=False, default="45")
-)
-OPERATOR_STORY_LIMIT = int(
-    get_env("OPERATOR_STORY_LIMIT", required=False, default="6")
-)
-WATCHLIST_STORY_LIMIT = int(
-    get_env("WATCHLIST_STORY_LIMIT", required=False, default="3")
-)
+
+@lru_cache(maxsize=1)
+def current_config() -> AppConfig:
+    return load_config()
+
+
+_DEFAULT_CONFIG = current_config()
+
+OPENAI_API_KEY = _DEFAULT_CONFIG.openai_api_key
+OPENAI_MODEL = _DEFAULT_CONFIG.openai_model
+DIGEST_ANALYST_AGENT_ENABLED = _DEFAULT_CONFIG.digest_analyst_agent_enabled
+DIGEST_ANALYST_AGENT_MODEL = _DEFAULT_CONFIG.digest_analyst_agent_model
+DIGEST_ANALYST_AGENT_TIMEOUT_SECONDS = _DEFAULT_CONFIG.digest_analyst_agent_timeout_seconds
+
+GMAIL_ADDRESS = _DEFAULT_CONFIG.gmail_address
+GMAIL_APP_PASSWORD = _DEFAULT_CONFIG.gmail_app_password
+TO_EMAIL = _DEFAULT_CONFIG.to_email
+EMAIL_SUBJECT_PREFIX = _DEFAULT_CONFIG.email_subject_prefix
+DIGEST_MODE = _DEFAULT_CONFIG.digest_mode
+
+GITHUB_TOKEN = _DEFAULT_CONFIG.github_token
+NEWS_FEED_URLS = list(_DEFAULT_CONFIG.news_feed_urls)
+MAX_ITEMS_PER_CATEGORY = _DEFAULT_CONFIG.max_items_per_category
+REGULATORY_TARGET_ITEMS = _DEFAULT_CONFIG.regulatory_target_items
+
+LOCAL_TIMEZONE = _DEFAULT_CONFIG.local_timezone
+STATE_FILE_PATH = _DEFAULT_CONFIG.state_file_path
+DIGEST_MEMORY_FILE_PATH = _DEFAULT_CONFIG.digest_memory_file_path
+SOURCE_POLICY_FILE_PATH = _DEFAULT_CONFIG.source_policy_file_path
+THESES_FILE_PATH = _DEFAULT_CONFIG.theses_file_path
+MARKET_MAP_FILE_PATH = _DEFAULT_CONFIG.market_map_file_path
+GITHUB_WATCHLIST_FILE_PATH = _DEFAULT_CONFIG.github_watchlist_file_path
+OPERATOR_BRIEF_FILE_PATH = _DEFAULT_CONFIG.operator_brief_file_path
+OPERATOR_COCKPIT_FILE_PATH = _DEFAULT_CONFIG.operator_cockpit_file_path
+HISTORY_MAX_EVENTS = _DEFAULT_CONFIG.history_max_events
+HISTORY_REPEAT_WINDOW_DAYS = _DEFAULT_CONFIG.history_repeat_window_days
+HISTORY_CONTEXT_WINDOW_DAYS = _DEFAULT_CONFIG.history_context_window_days
+BRIEF_HISTORY_MAX_DAYS = _DEFAULT_CONFIG.brief_history_max_days
+OPERATOR_STORY_LIMIT = _DEFAULT_CONFIG.operator_story_limit
+WATCHLIST_STORY_LIMIT = _DEFAULT_CONFIG.watchlist_story_limit
 
 # Daily Digest v2 personalization config.
 SCORING_WEIGHTS = {
@@ -177,210 +329,4 @@ OBJECTIVE_SCORE_WEIGHTS = {
         "build_relevance": 0.15,
         "theme_momentum": 0.1,
     },
-}
-
-PRIORITY_THEME_RULES = {
-    "healthcare_ai_pm": {
-        "label": "Healthcare AI PM",
-        "keywords": [
-            "digital health",
-            "healthcare ai",
-            "health it",
-            "clinical workflow",
-            "provider workflow",
-            "care delivery",
-            "clinical decision support",
-            "ehr",
-            "epic",
-            "cerner",
-            "interoperability",
-            "fhir",
-            "tefca",
-            "medical device software",
-            "product strategy",
-        ],
-        "dimension_boosts": {
-            "career_relevance": 2.0,
-            "build_relevance": 1.0,
-            "content_potential": 0.6,
-            "regulatory_significance": 1.2,
-        },
-    },
-    "healthcare_admin_automation": {
-        "label": "Healthcare Admin Automation",
-        "keywords": [
-            "prior authorization",
-            "prior auth",
-            "referral",
-            "referrals",
-            "referral management",
-            "patient intake",
-            "intake",
-            "eligibility",
-            "benefits verification",
-            "claims",
-            "claims attachments",
-            "utilization management",
-            "utilization review",
-            "revenue cycle",
-            "rcm",
-            "billing",
-            "denials",
-            "denial management",
-            "documentation",
-            "ambient",
-            "scribe",
-            "charting",
-            "scheduling",
-            "patient access",
-            "forms",
-            "fax",
-            "contact center",
-            "workflow automation",
-            "appeals",
-            "electronic signatures",
-            "care coordination",
-        ],
-        "dimension_boosts": {
-            "career_relevance": 1.8,
-            "build_relevance": 2.0,
-            "content_potential": 0.6,
-            "regulatory_significance": 0.4,
-            "side_hustle_relevance": 2.0,
-        },
-    },
-    "agents_workflows": {
-        "label": "Agents And Workflows",
-        "keywords": [
-            "agent",
-            "agents",
-            "agentic",
-            "workflow engine",
-            "orchestration",
-            "multi-agent",
-            "copilot",
-            "task runner",
-            "autonomous",
-        ],
-        "dimension_boosts": {
-            "career_relevance": 0.6,
-            "build_relevance": 0.9,
-            "content_potential": 0.4,
-            "side_hustle_relevance": 0.4,
-        },
-    },
-    "llm_eval_rag_governance_safety": {
-        "label": "LLM Evals RAG Governance Safety",
-        "keywords": [
-            "eval",
-            "evaluation",
-            "benchmark",
-            "guardrail",
-            "governance",
-            "safety",
-            "rag",
-            "retrieval",
-            "vector",
-            "knowledge base",
-            "audit",
-            "monitoring",
-            "hallucination",
-            "prompt injection",
-            "privacy",
-            "security",
-        ],
-        "dimension_boosts": {
-            "career_relevance": 0.9,
-            "build_relevance": 1.1,
-            "content_potential": 0.6,
-            "regulatory_significance": 1.4,
-        },
-    },
-    "low_reg_friction_wedges": {
-        "label": "Low Friction Product Wedges",
-        "keywords": [
-            "documentation",
-            "scheduling",
-            "patient messaging",
-            "call center",
-            "patient access",
-            "operations",
-            "back office",
-            "appeals",
-            "claims",
-            "revenue cycle",
-            "quality reporting",
-            "ambient",
-            "referral",
-            "intake",
-            "care coordination",
-            "workflow support",
-        ],
-        "dimension_boosts": {
-            "build_relevance": 1.3,
-            "content_potential": 0.6,
-            "side_hustle_relevance": 1.9,
-            "career_relevance": 0.9,
-        },
-    },
-    "content_opportunities": {
-        "label": "Content Opportunities",
-        "keywords": [
-            "policy",
-            "framework",
-            "launch",
-            "funding",
-            "hiring",
-            "roadmap",
-            "trend",
-            "roi",
-            "adoption",
-            "case study",
-            "benchmark",
-            "industry",
-        ],
-        "dimension_boosts": {
-            "content_potential": 1.0,
-            "career_relevance": 0.2,
-            "build_relevance": 0.1,
-        },
-    },
-    "job_search": {
-        "label": "Healthcare AI PM Roles",
-        "keywords": [
-            "product manager",
-            "pm role",
-            "hiring",
-            "leadership",
-            "platform",
-            "roadmap",
-            "implementation",
-            "stakeholder",
-            "go to market",
-            "enterprise",
-            "workflow roi",
-        ],
-        "dimension_boosts": {
-            "career_relevance": 1.9,
-            "content_potential": 0.5,
-            "regulatory_significance": 0.4,
-        },
-    },
-}
-
-TRACKED_ENTITY_RULES = {
-    "openai": ["openai", "gpt", "chatgpt"],
-    "anthropic": ["anthropic", "claude"],
-    "google": ["google", "gemini", "deepmind"],
-    "microsoft": ["microsoft", "azure"],
-    "meta": ["meta", "llama"],
-    "nvidia": ["nvidia"],
-    "fda": ["fda", "food and drug administration"],
-    "cms": ["cms", "centers for medicare and medicaid services"],
-    "astp_onc": ["astp", "onc", "health it certification"],
-    "ftc": ["ftc", "federal trade commission"],
-    "hhs": ["hhs", "department of health and human services"],
-    "tefca": ["tefca"],
-    "fhir": ["fhir"],
-    "epic": ["epic"],
 }

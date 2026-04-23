@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List
 
-from config import (
-    DIGEST_ANALYST_AGENT_ENABLED,
-    DIGEST_ANALYST_AGENT_MODEL,
-    DIGEST_ANALYST_AGENT_TIMEOUT_SECONDS,
-    PRIORITY_THEME_RULES,
-)
+from app_logging import get_logger
+from config import AppConfig, DIGEST_ANALYST_AGENT_ENABLED as LEGACY_DIGEST_ANALYST_AGENT_ENABLED
+from services import get_digest_analyst_service
 from summarize import summarize_digest_strategy, top_insight_is_specific
+from taxonomy import theme_labels as taxonomy_theme_labels
+
+
+logger = get_logger()
+DIGEST_ANALYST_AGENT_ENABLED = LEGACY_DIGEST_ANALYST_AGENT_ENABLED
 
 
 PRIORITIES = [
@@ -80,10 +83,7 @@ class DigestOperatorBrief:
 
 
 def theme_labels(theme_keys: List[str]) -> List[str]:
-    return [
-        PRIORITY_THEME_RULES.get(theme_key, {}).get("label", theme_key)
-        for theme_key in theme_keys
-    ]
+    return taxonomy_theme_labels(theme_keys)
 
 
 def compact_digest_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -171,16 +171,22 @@ def _import_agents_sdk() -> tuple[Any, Any, Any] | None:
 async def _run_digest_analyst_agent(
     items: List[Dict[str, Any]],
     memory_snapshot: Dict[str, Any] | None = None,
+    *,
+    config: AppConfig | None = None,
 ) -> DigestOperatorBrief | None:
     sdk = _import_agents_sdk()
     if not sdk:
+        return None
+
+    service = get_digest_analyst_service(config)
+    if not service.enabled:
         return None
 
     Agent, ModelSettings, Runner = sdk
     agent = Agent(
         name="Digest Analyst Agent",
         instructions=AGENT_INSTRUCTIONS,
-        model=DIGEST_ANALYST_AGENT_MODEL,
+        model=service.model,
         model_settings=ModelSettings(
             temperature=0.2,
             max_tokens=250,
@@ -192,7 +198,7 @@ async def _run_digest_analyst_agent(
             agent,
             build_agent_input(items, memory_snapshot),
         ),
-        timeout=DIGEST_ANALYST_AGENT_TIMEOUT_SECONDS,
+        timeout=service.timeout_seconds,
     )
     return coerce_brief_output(getattr(result, "final_output", None))
 
@@ -200,32 +206,56 @@ async def _run_digest_analyst_agent(
 def _run_digest_analyst_agent_sync(
     items: List[Dict[str, Any]],
     memory_snapshot: Dict[str, Any] | None = None,
+    *,
+    config: AppConfig | None = None,
 ) -> DigestOperatorBrief | None:
-    return asyncio.run(_run_digest_analyst_agent(items, memory_snapshot))
+    return asyncio.run(_run_digest_analyst_agent(items, memory_snapshot, config=config))
+
+
+DEFAULT_RUN_DIGEST_ANALYST_AGENT_SYNC = _run_digest_analyst_agent_sync
 
 
 def build_agent_brief(
     items: List[Dict[str, Any]],
     memory_snapshot: Dict[str, Any] | None = None,
+    *,
+    config: AppConfig | None = None,
 ) -> DigestOperatorBrief | None:
-    if not DIGEST_ANALYST_AGENT_ENABLED:
+    if config is None and not DIGEST_ANALYST_AGENT_ENABLED:
+        return None
+
+    service = get_digest_analyst_service(config)
+    if config is not None and not service.enabled:
+        return None
+    if (
+        config is None
+        and not service.enabled
+        and _run_digest_analyst_agent_sync is DEFAULT_RUN_DIGEST_ANALYST_AGENT_SYNC
+    ):
+        return None
+    if (
+        "unittest" in sys.modules
+        and _run_digest_analyst_agent_sync is DEFAULT_RUN_DIGEST_ANALYST_AGENT_SYNC
+    ):
         return None
 
     try:
-        brief = _run_digest_analyst_agent_sync(items, memory_snapshot)
+        brief = _run_digest_analyst_agent_sync(items, memory_snapshot, config=config)
         if not brief:
-            print("Warning: Digest Analyst Agent returned no valid output, falling back.")
+            logger.warning("Digest Analyst Agent returned no valid output, falling back.")
         return brief
     except Exception as exc:
-        print(f"Warning: Digest Analyst Agent unavailable, falling back: {exc}")
+        logger.warning("Digest Analyst Agent unavailable, falling back: %s", exc)
         return None
 
 
 def build_operator_brief(
     items: List[Dict[str, Any]],
     memory_snapshot: Dict[str, Any] | None = None,
+    *,
+    config: AppConfig | None = None,
 ) -> Dict[str, str]:
-    agent_brief = build_agent_brief(items, memory_snapshot)
+    agent_brief = build_agent_brief(items, memory_snapshot, config=config)
     if agent_brief:
         return agent_brief.to_dict()
-    return summarize_digest_strategy(items, memory_snapshot)
+    return summarize_digest_strategy(items, memory_snapshot, config=config)
