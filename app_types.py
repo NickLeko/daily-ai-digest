@@ -24,6 +24,10 @@ class DigestItem(TypedDict, total=False):
     workflow_wedges: List[str]
     operator_relevance: str
     near_term_actionability: str
+    ai_relevance: str
+    healthcare_workflow_relevance: str
+    regulatory_materiality: str
+    hard_signal_evidence: List[str]
     confidence: str
     confidence_display: str
     confidence_override_reason: str
@@ -68,6 +72,12 @@ class Story(TypedDict, total=False):
     workflow_wedges: List[str]
     operator_relevance: str
     near_term_actionability: str
+    ai_relevance: str
+    healthcare_workflow_relevance: str
+    regulatory_materiality: str
+    hard_signal_evidence: List[str]
+    candidate_tier: str
+    tier_reason: str
     watchlist_matches: List[Dict[str, Any]]
     change_status: str
     signal_quality: str

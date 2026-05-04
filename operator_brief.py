@@ -26,8 +26,10 @@ from operator_brief_selection import (
     build_near_miss_items,
     build_skipped_news_items,
     max_story_objective_score,
+    story_candidate_tier,
     story_has_target_fit,
     story_is_surface_worthy,
+    story_tier_reason,
     story_surface_worthiness,
     story_surface_worthiness_reason,
 )
@@ -182,6 +184,20 @@ def unique(values: Iterable[str]) -> List[str]:
         seen.add(normalized)
         ordered.append(normalized)
     return ordered
+
+
+RELEVANCE_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3}
+
+
+def strongest_relevance_value(values: Iterable[object]) -> str:
+    strongest = "none"
+    for value in values:
+        normalized = str(value or "none").strip().lower()
+        if normalized not in RELEVANCE_RANK:
+            normalized = "none"
+        if RELEVANCE_RANK[normalized] > RELEVANCE_RANK[strongest]:
+            strongest = normalized
+    return strongest
 
 
 def isoformat_or_empty(value: Any) -> str:
@@ -590,6 +606,16 @@ def normalize_item(
         "workflow_wedges": [str(value) for value in item.get("workflow_wedges", []) or []],
         "operator_relevance": str(item.get("operator_relevance", "low") or "low"),
         "near_term_actionability": str(item.get("near_term_actionability", "low") or "low"),
+        "ai_relevance": str(item.get("ai_relevance", "none") or "none"),
+        "healthcare_workflow_relevance": str(
+            item.get("healthcare_workflow_relevance", "none") or "none"
+        ),
+        "regulatory_materiality": str(item.get("regulatory_materiality", "none") or "none"),
+        "hard_signal_evidence": [
+            str(value)
+            for value in item.get("hard_signal_evidence", []) or []
+            if str(value).strip()
+        ],
         "is_generic_devtool": bool(item.get("is_generic_devtool")),
         "generic_repo_cap_exempt": bool(item.get("generic_repo_cap_exempt")),
         "signal_quality": signal_quality,
@@ -894,6 +920,21 @@ def build_stories(
             for signal in (item.get("materiality_signals") or [])
             if str(signal).strip()
         )
+        cluster_hard_signal_evidence = unique(
+            str(evidence)
+            for item in cluster
+            for evidence in (item.get("hard_signal_evidence") or [])
+            if str(evidence).strip()
+        )
+        cluster_ai_relevance = strongest_relevance_value(
+            item.get("ai_relevance", "none") for item in cluster
+        )
+        cluster_healthcare_workflow_relevance = strongest_relevance_value(
+            item.get("healthcare_workflow_relevance", "none") for item in cluster
+        )
+        cluster_regulatory_materiality = strongest_relevance_value(
+            item.get("regulatory_materiality", "none") for item in cluster
+        )
         cluster_selection_penalties = unique(
             str(penalty)
             for item in cluster
@@ -1038,6 +1079,10 @@ def build_stories(
             ),
             "operator_relevance": lead_item.get("operator_relevance", "low"),
             "near_term_actionability": lead_item.get("near_term_actionability", "low"),
+            "ai_relevance": cluster_ai_relevance,
+            "healthcare_workflow_relevance": cluster_healthcare_workflow_relevance,
+            "regulatory_materiality": cluster_regulatory_materiality,
+            "hard_signal_evidence": cluster_hard_signal_evidence,
             "is_generic_devtool": bool(lead_item.get("is_generic_devtool")),
             "generic_repo_cap_exempt": bool(lead_item.get("generic_repo_cap_exempt")),
             "signal_quality": cluster_signal_quality,
@@ -1072,6 +1117,8 @@ def build_stories(
         if not why_it_matters_is_specific(story["why_it_matters"]) or support_count > 1:
             story["why_it_matters"] = build_story_why_it_matters(story)
         story["action_suggestion"] = build_story_action(story)
+        story["candidate_tier"] = story_candidate_tier(story)
+        story["tier_reason"] = story_tier_reason(story)
         stories.append(story)
 
     return sorted(
@@ -1310,6 +1357,11 @@ def apply_story_metadata_to_items(
         item["thesis_links"] = story_item.get("thesis_links", [])
         item["watchlist_matches"] = story_item.get("watchlist_matches", [])
         item["change_status"] = story_item.get("change_status", "")
+        item["ai_relevance"] = story_item.get("ai_relevance", "none")
+        item["healthcare_workflow_relevance"] = story_item.get("healthcare_workflow_relevance", "none")
+        item["regulatory_materiality"] = story_item.get("regulatory_materiality", "none")
+        item["hard_signal_evidence"] = story_item.get("hard_signal_evidence", [])
+        item["candidate_tier"] = story_item.get("candidate_tier", "")
 
 
 def serializable_item(item: Dict[str, Any]) -> Dict[str, Any]:

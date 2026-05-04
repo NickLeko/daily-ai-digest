@@ -323,7 +323,7 @@ def format_weekly_operator_brief_html(
     html = f"""
     <html>
       <body style="font-family: Arial, sans-serif; line-height: 1.5; color: #222; max-width: 860px; margin: 0 auto; padding: 12px; background: #f8fafc;">
-        <h2 style="margin-bottom: 8px;">Weekly AI Digest - Operator Review</h2>
+        <h2 style="margin-bottom: 8px;">Weekly Healthcare AI + Workflow Digest - Operator Review</h2>
         <p style="margin-top: 0;"><strong>Date:</strong> {date_str}</p>
         <p style="margin: 0 0 16px 0;">
           {escaped(str(summary.get('raw_item_count', 0)))} screened items organized into

@@ -33,7 +33,8 @@ from formatter import (
 )
 from memory import build_memory_snapshot
 from operator_brief import build_operator_brief_artifact, select_story_cards, story_is_surface_worthy
-from scoring import attach_priority_scores, build_top_picks
+from operator_brief_selection import OPERATOR_GRADE, WATCHLIST, story_candidate_tier
+from scoring import attach_priority_scores, build_top_picks, hard_signal_evidence_types
 from selection_audit import build_selection_diagnostics
 from summarize import (
     fallback_digest_strategy,
@@ -191,12 +192,12 @@ class FormatterTests(unittest.TestCase):
 
         html = format_digest_html(items, "Insight")
 
-        self.assertEqual(html.count("<strong>Summary:</strong>"), 4)
+        self.assertEqual(html.count("<strong>What happened:</strong>"), 3)
         self.assertIn("First summary sentence.", html)
         self.assertIn("First why sentence.", html)
         self.assertNotIn("Second summary sentence should not render.", html)
         self.assertNotIn("Second why sentence should not render.", html)
-        self.assertNotIn("News 4", html)
+        self.assertNotIn("News 3", html)
 
     def test_daily_operator_digest_only_renders_specific_high_confidence_actions(self) -> None:
         brief = {
@@ -214,8 +215,13 @@ class FormatterTests(unittest.TestCase):
                     "why_it_matters": "Prior-auth managers should adjust backlog scope this week. Extra why noise.",
                     "action_suggestion": "Audit backlog, trading-partner, and control gaps in prior auth this week.",
                     "category": "Regulatory",
+                    "story_score": 38.0,
+                    "objective_scores": {"career": 6.8, "build": 6.9, "content": 5.8, "regulatory": 7.2},
+                    "operator_relevance": "high",
                     "workflow_wedges": ["prior auth"],
                     "near_term_actionability": "high",
+                    "material_operator_signal": True,
+                    "hard_signal_evidence": ["regulatory change", "workflow impact"],
                 },
                 {
                     "story_id": "generic",
@@ -227,6 +233,9 @@ class FormatterTests(unittest.TestCase):
                     "why_it_matters": "Teams can review later.",
                     "action_suggestion": "Keep an eye on this space.",
                     "category": "News",
+                    "story_score": 28.0,
+                    "objective_scores": {"career": 5.0, "build": 5.0, "content": 5.0, "regulatory": 2.0},
+                    "operator_relevance": "low",
                     "workflow_wedges": ["prior auth"],
                     "near_term_actionability": "low",
                 },
@@ -261,14 +270,52 @@ class FormatterTests(unittest.TestCase):
 
         html = format_operator_brief_html(brief, story_limit=4)
 
-        self.assertIn("HEADLINES", html)
+        self.assertIn("Top Signal", html)
         self.assertEqual(html.count("The case for network-based interoperability"), 1)
         self.assertEqual(
             html.count("Establishing 5G connectivity to enable a smart regional health system"),
             1,
         )
-        self.assertIn("2 news stories selected from 6 screened items.", html)
-        self.assertNotIn("2 stories from 6 screened items: 2 news items.", html)
+        self.assertIn("Screened: 6", html)
+        self.assertIn("Operator-grade: 2", html)
+
+    def test_larger_operator_candidate_pool_does_not_increase_rendered_story_count(self) -> None:
+        titles = [
+            "Prior auth evidence exchange deployment",
+            "Denials queue automation rollout",
+            "Referral intake routing implementation",
+            "Eligibility verification staffing shift",
+            "Clinical inbox triage deployment",
+            "RCM coding workflow automation",
+        ]
+        story_cards = [
+            operator_story(
+                f"story-{index}",
+                title,
+                story_score=45.0 - index,
+                operator_relevance="high",
+                actionability="high",
+                workflow_wedges=["prior auth", "RCM", "referral/intake"],
+                matched_themes=["healthcare_admin_automation"],
+                reliability_label="High",
+            )
+            for index, title in enumerate(titles)
+        ]
+        for story in story_cards:
+            story["hard_signal_evidence"] = ["workflow impact"]
+        brief = {
+            "summary": {"raw_item_count": 32, "story_count": 6, "story_card_count": 6},
+            "story_cards": story_cards,
+            "stories": story_cards,
+        }
+
+        html = format_operator_brief_html(brief)
+
+        self.assertIn("Screened: 32", html)
+        self.assertIn("Operator-grade: 3", html)
+        self.assertEqual(html.count("<strong>What happened:</strong>"), 3)
+        self.assertIn("Referral intake routing implementation", html)
+        self.assertNotIn("Eligibility verification staffing shift", html)
 
     def test_sentence_limited_keeps_us_abbreviation_intact(self) -> None:
         summary = (
@@ -328,12 +375,14 @@ class FormatterTests(unittest.TestCase):
 
         self.assertEqual(
             [story["story_id"] for story in selected],
-            ["selected", "strong-backfill", "medium-backfill"],
+            ["selected", "strong-backfill"],
         )
-        self.assertIn("3 stories selected from 4 screened items", html)
+        self.assertIn("STRONG_SIGNAL", html)
+        self.assertIn("Screened: 4", html)
+        self.assertIn("Operator-grade: 2", html)
         self.assertIn("CMS prior auth evidence exchange", html)
         self.assertIn("Prior auth operating benchmark", html)
-        self.assertIn("CMS ACCESS participants signal payer workflow change", html)
+        self.assertNotIn("CMS ACCESS participants signal payer workflow change", html)
         self.assertNotIn("Generic agent connector hype", html)
         self.assertNotIn("from 4 items", html)
 
@@ -354,7 +403,8 @@ class FormatterTests(unittest.TestCase):
         html = format_operator_brief_html(brief, story_limit=4)
 
         self.assertEqual([story["story_id"] for story in selected], ["first", "second", "third"])
-        self.assertIn("3 news stories selected from 4 screened items", html)
+        self.assertIn("STRONG_SIGNAL", html)
+        self.assertIn("Operator-grade: 3", html)
         self.assertNotIn("Extra eligible story", html)
 
     def test_single_story_daily_operator_digest_does_not_repeat_the_headline(self) -> None:
@@ -374,7 +424,9 @@ class FormatterTests(unittest.TestCase):
 
         self.assertNotIn("HEADLINES", html)
         self.assertEqual(html.count("Single CMS access story"), 1)
-        self.assertIn("1 news story selected from 1 screened item", html)
+        self.assertIn("STRONG_SIGNAL", html)
+        self.assertIn("Screened: 1", html)
+        self.assertIn("Operator-grade: 1", html)
 
     def test_daily_operator_digest_suppresses_near_duplicate_headlines(self) -> None:
         brief = {
@@ -389,6 +441,13 @@ class FormatterTests(unittest.TestCase):
                     "summary": "First summary.",
                     "why_it_matters": "Prior-auth managers should audit evidence exchange this week.",
                     "category": "Regulatory",
+                    "story_score": 38.0,
+                    "objective_scores": {"career": 6.8, "build": 6.9, "content": 5.8, "regulatory": 7.2},
+                    "operator_relevance": "high",
+                    "near_term_actionability": "high",
+                    "workflow_wedges": ["prior auth"],
+                    "material_operator_signal": True,
+                    "hard_signal_evidence": ["regulatory change", "workflow impact"],
                 },
                 {
                     "story_id": "second",
@@ -399,6 +458,13 @@ class FormatterTests(unittest.TestCase):
                     "summary": "Second summary.",
                     "why_it_matters": "Prior-auth managers should audit evidence exchange this week.",
                     "category": "Regulatory",
+                    "story_score": 36.0,
+                    "objective_scores": {"career": 6.6, "build": 6.7, "content": 5.6, "regulatory": 7.0},
+                    "operator_relevance": "high",
+                    "near_term_actionability": "high",
+                    "workflow_wedges": ["prior auth"],
+                    "material_operator_signal": True,
+                    "hard_signal_evidence": ["regulatory change", "workflow impact"],
                 },
             ],
         }
@@ -432,7 +498,9 @@ class FormatterTests(unittest.TestCase):
         daily_html = format_operator_brief_html(brief, story_limit=4)
         weekly_html = format_operator_brief_html(brief, mode="weekly")
 
-        self.assertIn("No strong signal today from 1 screened item.", daily_html)
+        self.assertIn("QUIET_DAY", daily_html)
+        self.assertIn("Screened: 1", daily_html)
+        self.assertIn("Operator-grade: 0", daily_html)
         self.assertNotIn("Confidence: High", daily_html)
         self.assertNotIn("Confidence: Medium", daily_html)
         self.assertIn("Confidence:</strong> Low", weekly_html)
@@ -1217,8 +1285,11 @@ class SignalQualityGateTests(unittest.TestCase):
 
         self.assertEqual(brief["summary"]["story_card_count"], 0)
         self.assertEqual(select_daily_stories(brief), [])
-        self.assertIn("No strong signal today from 1 screened item.", html)
-        self.assertIn("SCREENED BUT SKIPPED", html)
+        self.assertIn("WATCHLIST_ONLY", html)
+        self.assertIn("Screened: 1", html)
+        self.assertIn("Operator-grade: 0", html)
+        self.assertIn("Watchlist: 1", html)
+        self.assertIn("WATCHLIST / NEAR MISSES", html)
         self.assertIn("HHS launches $4M KidneyX challenge", html)
         self.assertEqual(len(brief["skipped_news_items"]), 1)
         self.assertEqual(brief["stories"][0]["confidence"], "Low")
@@ -1227,7 +1298,7 @@ class SignalQualityGateTests(unittest.TestCase):
         thin_story = operator_story(
             "thin-single",
             "Thin but readable workflow item",
-            story_score=25.0,
+            story_score=29.0,
             objective_scores={"career": 5.7, "build": 5.8, "content": 5.4, "regulatory": 3.0},
             operator_relevance="medium",
             actionability="medium",
@@ -1310,22 +1381,281 @@ class SignalQualityGateTests(unittest.TestCase):
         self.assertEqual(select_daily_stories(brief), [])
         self.assertEqual(len(brief["near_miss_items"]), 3)
         self.assertEqual(len(brief["skipped_news_items"]), 3)
-        self.assertIn("No strong signal today from 4 screened items.", html)
+        self.assertIn("WATCHLIST_ONLY", html)
+        self.assertIn("Screened: 4", html)
+        self.assertIn("Operator-grade: 0", html)
+        self.assertIn("Watchlist: 3", html)
         self.assertIn("No operator-grade stories cleared today's quality bar.", html)
-        self.assertLess(
-            html.index("No strong signal today"),
-            html.index("WORTH A QUICK GLANCE"),
-        )
-        self.assertEqual(html.count("Did not clear the bar because"), 3)
+        self.assertIn("WATCHLIST / NEAR MISSES", html)
+        self.assertEqual(html.count("Why not selected:"), 3)
         self.assertIn("Regional health system pilots referral intake assistant", html)
-        self.assertIn("without reported deployment outcomes", html)
-        self.assertIn("score and objective evidence stayed below the operator-grade threshold", html)
+        self.assertIn("Healthcare workflow topic worth monitoring", html)
+        self.assertIn("Healthcare ops relevance present, but AI/admin automation relevance was weak", html)
         self.assertNotIn("Hospital group demos scheduling inbox assistant", html)
         self.assertNotIn("Integration leads", html)
         self.assertNotIn("health IT owners", html)
         self.assertNotIn("backlog review", html)
         self.assertNotIn("FHIR/API dependencies", html)
-        self.assertNotIn("SCREENED BUT SKIPPED", html)
+
+    def test_daily_digest_renders_selected_stories_plus_near_misses(self) -> None:
+        selected_story = operator_story(
+            "selected-prior-auth",
+            "Payer deploys prior auth audit automation",
+            category="News",
+            story_score=38.0,
+            operator_relevance="high",
+            actionability="high",
+            workflow_wedges=["prior auth"],
+            matched_themes=["healthcare_admin_automation"],
+            reliability_label="High",
+        )
+        selected_story["hard_signal_evidence"] = ["real deployment", "workflow impact"]
+        near_miss = {
+            "story_id": "watch-referrals",
+            "title": "Hospital tests referral intake assistant",
+            "source": "Regional Trade Journal",
+            "summary": "A hospital described referral intake automation without outcomes.",
+            "reason_to_watch": "Healthcare workflow topic worth monitoring for deployment proof.",
+            "why_not_selected": "Healthcare ops relevance present, but AI/admin automation relevance was weak.",
+            "candidate_tier": WATCHLIST,
+        }
+        brief = {
+            "summary": {"raw_item_count": 12, "story_count": 2, "story_card_count": 1},
+            "story_cards": [selected_story],
+            "stories": [selected_story],
+            "near_miss_items": [near_miss],
+        }
+
+        html = format_operator_brief_html(brief)
+
+        self.assertIn("STRONG_SIGNAL", html)
+        self.assertIn("Payer deploys prior auth audit automation", html)
+        self.assertIn("WATCHLIST / NEAR MISSES", html)
+        self.assertIn("Hospital tests referral intake assistant", html)
+        self.assertIn("Why not selected:", html)
+
+    def test_watchlist_item_cannot_be_daily_backfilled_into_top_signal(self) -> None:
+        selected_story = operator_story(
+            "selected-prior-auth",
+            "Payer deploys prior auth audit automation",
+            story_score=42.0,
+            operator_relevance="high",
+            actionability="high",
+            workflow_wedges=["prior auth"],
+            matched_themes=["healthcare_admin_automation"],
+            reliability_label="High",
+        )
+        selected_story["hard_signal_evidence"] = ["workflow impact"]
+        watchlist_story = {
+            "story_id": "watch-policy",
+            "cluster_title": "CMS discusses FHIR data exchange priorities",
+            "title": "CMS discusses FHIR data exchange priorities",
+            "category": "Regulatory",
+            "story_score": 50.0,
+            "priority_score": 50.0,
+            "reliability_label": "High",
+            "supporting_item_count": 1,
+            "objective_scores": {"career": 5.0, "build": 5.0, "content": 5.0, "regulatory": 7.5},
+            "operator_relevance": "medium",
+            "near_term_actionability": "medium",
+            "workflow_wedges": [],
+            "matched_themes": [],
+            "ai_relevance": "medium",
+            "healthcare_workflow_relevance": "low",
+            "regulatory_materiality": "medium",
+            "hard_signal_evidence": [],
+            "material_operator_signal": False,
+            "signal_quality": "medium",
+        }
+        brief = {
+            "summary": {"raw_item_count": 2, "story_count": 2, "story_card_count": 1},
+            "story_cards": [selected_story],
+            "stories": [selected_story, watchlist_story],
+        }
+
+        selected = select_daily_stories(brief)
+        html = format_operator_brief_html(brief)
+
+        self.assertEqual([story["story_id"] for story in selected], ["selected-prior-auth"])
+        self.assertNotIn("CMS discusses FHIR data exchange priorities", html)
+        self.assertIn("Operator-grade: 1", html)
+
+    def test_top_signal_and_watchlist_dedupe_final_selected_story_ids(self) -> None:
+        selected_story = operator_story(
+            "selected-prior-auth",
+            "Payer deploys prior auth audit automation",
+            story_score=42.0,
+            operator_relevance="high",
+            actionability="high",
+            workflow_wedges=["prior auth"],
+            matched_themes=["healthcare_admin_automation"],
+            reliability_label="High",
+        )
+        selected_story["hard_signal_evidence"] = ["workflow impact"]
+        duplicate_near_miss = {
+            "story_id": "selected-prior-auth",
+            "title": "Payer deploys prior auth audit automation",
+            "source": "Duplicate Source",
+            "reason_to_watch": "Duplicate should be filtered.",
+            "why_not_selected": "Duplicate should not render.",
+            "candidate_tier": WATCHLIST,
+        }
+        real_near_miss = {
+            "story_id": "watch-referrals",
+            "title": "Hospital tests referral intake assistant",
+            "source": "Regional Trade Journal",
+            "reason_to_watch": "Healthcare workflow topic worth monitoring for deployment proof.",
+            "why_not_selected": "Strong topic fit, but no hard evidence of deployment, customer, metric, regulatory change, or workflow impact.",
+            "candidate_tier": WATCHLIST,
+        }
+        brief = {
+            "summary": {"raw_item_count": 3, "story_count": 2, "story_card_count": 1},
+            "story_cards": [selected_story],
+            "stories": [selected_story],
+            "near_miss_items": [duplicate_near_miss, real_near_miss],
+        }
+
+        html = format_operator_brief_html(brief)
+
+        self.assertEqual(html.count("Payer deploys prior auth audit automation"), 1)
+        self.assertIn("Hospital tests referral intake assistant", html)
+        self.assertIn("Operator-grade: 1", html)
+        self.assertIn("Watchlist: 1", html)
+        self.assertEqual(html.count("<strong>What happened:</strong>"), 1)
+
+    def test_healthcare_workflow_only_story_without_hard_evidence_is_watchlist(self) -> None:
+        healthcare_only = {
+            "story_id": "healthcare-only",
+            "cluster_title": "Hospital redesigns referral intake operating model",
+            "category": "News",
+            "story_score": 36.0,
+            "priority_score": 36.0,
+            "reliability_label": "High",
+            "supporting_item_count": 1,
+            "objective_scores": {"career": 6.2, "build": 5.9, "content": 5.5, "regulatory": 2.0},
+            "operator_relevance": "medium",
+            "near_term_actionability": "medium",
+            "workflow_wedges": ["referral/intake"],
+            "matched_themes": [],
+            "ai_relevance": "none",
+            "healthcare_workflow_relevance": "medium",
+            "regulatory_materiality": "none",
+            "hard_signal_evidence": [],
+            "material_operator_signal": False,
+        }
+
+        self.assertEqual(story_candidate_tier(healthcare_only), WATCHLIST)
+        self.assertEqual(select_story_cards([healthcare_only]), [])
+
+    def test_negated_pilot_story_does_not_trigger_hard_signal_evidence(self) -> None:
+        evidence = hard_signal_evidence_types(
+            "A hospital previewed a referral intake assistant pilot but did not name deployment, "
+            "did not name customer, and reported no outcomes."
+        )
+
+        self.assertNotIn("real deployment", evidence)
+        self.assertNotIn("named customer/provider/payer", evidence)
+        self.assertNotIn("operational metric", evidence)
+
+    def test_bare_pilot_does_not_count_as_real_deployment(self) -> None:
+        evidence = hard_signal_evidence_types(
+            "A regional hospital announced a referral intake assistant pilot for care coordination."
+        )
+
+        self.assertNotIn("real deployment", evidence)
+
+    def test_generic_hospital_or_payer_does_not_count_as_named_customer(self) -> None:
+        evidence = hard_signal_evidence_types(
+            "A hospital and payer discussed prior authorization automation and workflow strategy."
+        )
+
+        self.assertNotIn("named customer/provider/payer", evidence)
+
+    def test_regulatory_only_fhir_story_routes_to_watchlist_without_operational_evidence(self) -> None:
+        regulatory_only = {
+            "story_id": "cms-fhir-watch",
+            "cluster_title": "CMS recaps FHIR interoperability policy priorities",
+            "category": "Regulatory",
+            "story_score": 31.0,
+            "priority_score": 31.0,
+            "reliability_label": "High",
+            "supporting_item_count": 1,
+            "objective_scores": {"career": 4.0, "build": 4.2, "content": 4.5, "regulatory": 7.0},
+            "operator_relevance": "medium",
+            "near_term_actionability": "medium",
+            "workflow_wedges": [],
+            "matched_themes": [],
+            "ai_relevance": "none",
+            "healthcare_workflow_relevance": "low",
+            "regulatory_materiality": "medium",
+            "hard_signal_evidence": [],
+            "material_operator_signal": False,
+            "topic_key": "interoperability",
+        }
+
+        self.assertEqual(story_candidate_tier(regulatory_only), WATCHLIST)
+        self.assertEqual(select_story_cards([regulatory_only]), [])
+
+    def test_generic_skip_reason_language_is_not_used(self) -> None:
+        now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
+        scored = attach_priority_scores(
+            [self.weak_kidney_challenge_item()],
+            {"version": 1, "events": []},
+            now=now,
+        )
+        summarized = self.summarize_with_generic_boilerplate(scored)
+        brief = build_operator_brief_artifact(
+            summarized,
+            memory={"version": 2, "events": [], "daily_briefs": []},
+            memory_snapshot={},
+        )
+        reasons = [
+            str(item.get("skip_reason") or item.get("why_not_selected") or "")
+            for item in [*brief["skipped_news_items"], *brief["near_miss_items"]]
+        ]
+
+        self.assertTrue(any("no deployment, customer, metric, or workflow evidence" in reason for reason in reasons))
+        for reason in reasons:
+            self.assertNotEqual(reason, "signal was still too weak")
+            self.assertNotEqual(reason, "operator fit was too indirect")
+            self.assertNotEqual(reason, "score stayed below threshold")
+
+    def test_ehr_interoperability_story_requires_hard_workflow_or_data_infra_evidence(self) -> None:
+        thin_ehr_story = operator_story(
+            "thin-ehr",
+            "Vendor publishes EHR interoperability roadmap",
+            category="News",
+            story_score=42.0,
+            operator_relevance="high",
+            actionability="high",
+            workflow_wedges=["interoperability"],
+            matched_themes=[],
+            reliability_label="High",
+            material_operator_signal=False,
+        )
+        thin_ehr_story.update(
+            {
+                "ai_relevance": "none",
+                "healthcare_workflow_relevance": "high",
+                "hard_signal_evidence": [],
+            }
+        )
+        evidenced_ehr_story = {
+            **thin_ehr_story,
+            "story_id": "evidenced-ehr",
+            "cluster_title": "Health system implements EHR interoperability queue automation",
+            "matched_themes": ["healthcare_admin_automation"],
+            "ai_relevance": "medium",
+            "hard_signal_evidence": ["integration/interoperability change", "workflow impact"],
+            "material_operator_signal": True,
+        }
+
+        self.assertEqual(story_candidate_tier(thin_ehr_story), WATCHLIST)
+        self.assertEqual(story_candidate_tier(evidenced_ehr_story), OPERATOR_GRADE)
+        self.assertEqual(
+            [story["story_id"] for story in select_story_cards([thin_ehr_story, evidenced_ehr_story])],
+            ["evidenced-ehr"],
+        )
 
     def test_realistic_daily_path_selects_policy_story_and_keeps_filler_out(self) -> None:
         now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
@@ -1444,27 +1774,27 @@ class SignalQualityGateTests(unittest.TestCase):
 
         self.assertEqual(brief["summary"]["story_card_count"], 0)
         self.assertEqual(select_daily_stories(brief), [])
-        self.assertIn("No strong signal today from 3 screened items.", html)
+        self.assertIn("WATCHLIST_ONLY", html)
+        self.assertIn("Screened: 3", html)
+        self.assertIn("Operator-grade: 0", html)
+        self.assertIn("Watchlist: 1", html)
+        self.assertIn("WATCHLIST / NEAR MISSES", html)
+        self.assertIn("Selection Audit", html)
         self.assertNotIn("<strong>Summary:</strong>", html)
         self.assertNotIn("WORTH A QUICK GLANCE", html)
-        self.assertIn("SCREENED BUT SKIPPED", html)
+        self.assertNotIn("SCREENED BUT SKIPPED", html)
         self.assertGreaterEqual(len(brief["skipped_news_items"]), 1)
-        self.assertEqual(
-            html.count("Skipped because"),
-            len(brief["skipped_news_items"]),
-        )
-        self.assertIn(
-            "it was still an early announcement without concrete deployment or workflow evidence",
-            html,
-        )
+        self.assertIn("PR-only", html)
+        self.assertIn("Top rejection reason:", html)
+        self.assertNotIn("signal was still too weak", html)
         self.assertEqual(
             diagnostics["no_signal_fallback"]["reason_code"],
             "no_story_cards_passed_admission",
         )
-        self.assertEqual(diagnostics["no_signal_fallback"]["fallback_source"], "skipped_news")
+        self.assertEqual(diagnostics["no_signal_fallback"]["fallback_source"], "near_miss")
         self.assertEqual(
             diagnostics["no_signal_fallback"]["fallback_rendered_count"],
-            len(brief["skipped_news_items"]),
+            len(brief["near_miss_items"]),
         )
 
     def test_no_signal_day_uses_skipped_news_when_near_misses_are_empty(self) -> None:
@@ -1526,11 +1856,14 @@ class SignalQualityGateTests(unittest.TestCase):
         self.assertEqual(select_daily_stories(brief), [])
         self.assertEqual(len(brief["near_miss_items"]), 0)
         self.assertEqual(len(brief["skipped_news_items"]), 3)
-        self.assertIn("SCREENED BUT SKIPPED", html)
+        self.assertIn("QUIET_DAY", html)
+        self.assertIn("Screened: 4", html)
+        self.assertIn("Operator-grade: 0", html)
+        self.assertIn("Selection Audit", html)
+        self.assertNotIn("SCREENED BUT SKIPPED", html)
         self.assertNotIn("WORTH A QUICK GLANCE", html)
-        self.assertIn("Ambient outreach assistant pilot lacks deployment proof", html)
-        self.assertIn("Skipped because operator fit was too indirect", html)
-        self.assertEqual(html.count("Skipped because"), 3)
+        self.assertNotIn("Ambient outreach assistant pilot lacks deployment proof", html)
+        self.assertNotIn("operator fit was too indirect", html)
         self.assertEqual(diagnostics["no_signal_fallback"]["fallback_source"], "skipped_news")
         self.assertEqual(diagnostics["no_signal_fallback"]["fallback_rendered_count"], 3)
 
@@ -1563,6 +1896,9 @@ class SignalQualityGateTests(unittest.TestCase):
         self.assertEqual(select_daily_stories(brief), [])
         self.assertEqual(brief["near_miss_items"], [])
         self.assertEqual(brief["skipped_news_items"], [])
+        self.assertIn("QUIET_DAY", html)
+        self.assertIn("Selection Audit", html)
+        self.assertIn("No clean near-miss survived the watchlist floor.", html)
         self.assertNotIn("WORTH A QUICK GLANCE", html)
         self.assertNotIn("SCREENED BUT SKIPPED", html)
         self.assertEqual(diagnostics["no_signal_fallback"]["fallback_source"], "none")
@@ -1612,7 +1948,12 @@ class SignalQualityGateTests(unittest.TestCase):
 
         self.assertEqual(brief["summary"]["story_card_count"], 0)
         self.assertEqual(select_daily_stories(brief), [])
-        self.assertIn("No strong signal today from 3 screened items.", html)
+        self.assertIn("WATCHLIST_ONLY", html)
+        self.assertIn("Screened: 3", html)
+        self.assertIn("Operator-grade: 0", html)
+        self.assertIn("Watchlist: 1", html)
+        self.assertIn("WATCHLIST / NEAR MISSES", html)
+        self.assertIn("Selection Audit", html)
         self.assertTrue(all(story["confidence"] == "Low" for story in brief["stories"]))
         self.assertTrue(all(story["signal_quality"] == "weak" for story in brief["stories"]))
         self.assertTrue(all(story["selection_penalties"] for story in brief["stories"]))
@@ -1661,6 +2002,7 @@ class SignalQualityGateTests(unittest.TestCase):
         self.assertEqual(select_daily_stories(brief)[0]["cluster_title"], item["title"])
         self.assertEqual(brief["story_cards"][0]["confidence"], "High")
         self.assertNotIn("WORTH A QUICK GLANCE", html)
+        self.assertIn("STRONG_SIGNAL", html)
 
     def test_generic_why_it_matters_boilerplate_is_not_used_for_weak_story(self) -> None:
         now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
@@ -1709,6 +2051,7 @@ class SignalQualityGateTests(unittest.TestCase):
             "near_term_actionability": "high",
             "workflow_wedges": ["prior auth"],
             "matched_themes": ["healthcare_admin_automation"],
+            "hard_signal_evidence": ["workflow impact"],
             "watchlist_matches": [],
             "is_generic_devtool": False,
             "generic_repo_cap_exempt": False,
@@ -1989,6 +2332,7 @@ class RegulatorySelectionTests(unittest.TestCase):
         config = load_config(
             env={
                 "REGULATORY_TARGET_ITEMS": "5",
+                "REGULATORY_CANDIDATE_LIMIT": "5",
                 "LOCAL_TIMEZONE": "UTC",
             }
         )

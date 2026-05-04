@@ -320,9 +320,10 @@ class OperatorBriefTests(unittest.TestCase):
 
         html = format_operator_brief_html(brief)
 
-        self.assertIn("Daily AI Digest", html)
+        self.assertIn("Daily Healthcare AI + Workflow Digest", html)
         self.assertNotIn("HEADLINES", html)
-        self.assertIn("1 regulatory story selected from 1 screened item", html)
+        self.assertIn("Screened: 1", html)
+        self.assertIn("Operator-grade: 1", html)
         self.assertIn("CMS final rule for prior authorization attachments", html)
         self.assertIn("CMS Newsroom | Confidence: High", html)
         self.assertNotIn("WHAT CHANGED SINCE YESTERDAY", html)

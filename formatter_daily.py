@@ -12,6 +12,14 @@ from selection_policy import (
     NEAR_MISS_LIMIT,
     TARGET_THEME_KEYS,
 )
+from operator_brief_selection import (
+    OPERATOR_GRADE,
+    REJECTION_BUCKETS,
+    rejection_bucket_for_story,
+    relevance_value,
+    story_candidate_tier,
+    story_hard_signal_evidence,
+)
 from state import local_now
 
 from formatter_shared import (
@@ -99,6 +107,8 @@ def daily_backfill_has_target_fit(story: Dict[str, object]) -> bool:
 
 
 def daily_backfill_story_is_worthy(story: Dict[str, object]) -> bool:
+    if story_candidate_tier(story) != OPERATOR_GRADE:
+        return False
     if not daily_backfill_has_target_fit(story):
         return False
     if compact_text(story.get("reliability_label")).lower() == "low" and story_int(story, "supporting_item_count") < 2:
@@ -120,7 +130,13 @@ def daily_story_passes_render_quality(story: Dict[str, object]) -> bool:
     return not story_is_low_signal_for_render(story) and story_signal_quality_for_render(story) != "weak"
 
 
+def daily_story_is_operator_grade(story: Dict[str, object]) -> bool:
+    return story_candidate_tier(story) == OPERATOR_GRADE
+
+
 def single_daily_story_is_worthy(story: Dict[str, object]) -> bool:
+    if not daily_story_is_operator_grade(story):
+        return False
     if not daily_story_passes_render_quality(story):
         return False
 
@@ -216,7 +232,7 @@ def select_daily_stories_with_diagnostics(
     render_quality_filtered = 0
     duplicate_filtered = 0
     for story in candidates:
-        if not daily_story_passes_render_quality(story):
+        if not daily_story_passes_render_quality(story) or not daily_story_is_operator_grade(story):
             render_quality_filtered += 1
             continue
         if not append_daily_story(story, selected, seen):
@@ -333,7 +349,7 @@ def build_daily_story_header(
     ]
     screened_label = singular_plural(screened_count, "screened item")
     if not stories:
-        return f"No strong signal today from {screened_label}."
+        return f"QUIET_DAY from {screened_label}; no operator-grade stories cleared."
     if len(category_parts) == 1:
         category = next(category for category, count in counts.items() if count)
         category_story_label = {
@@ -351,6 +367,52 @@ def build_daily_story_header(
         f"{singular_plural(len(stories), 'story', 'stories')} selected from "
         f"{screened_label}{category_tail}."
     )
+
+
+def daily_verdict(stories: List[Dict[str, object]], watchlist_items: List[Dict[str, object]]) -> str:
+    if stories:
+        return "STRONG_SIGNAL"
+    if watchlist_items:
+        return "WATCHLIST_ONLY"
+    return "QUIET_DAY"
+
+
+def render_daily_verdict(
+    operator_brief: Dict[str, object],
+    stories: List[Dict[str, object]],
+    watchlist_items: List[Dict[str, object]],
+) -> str:
+    summary = operator_brief.get("summary", {}) or {}
+    screened_count = int(summary.get("raw_item_count", 0) or 0)
+    verdict = daily_verdict(stories, watchlist_items)
+    return f"""
+        <h3 style="margin: 16px 0 6px 0; font-size: 15px;">Verdict</h3>
+        <p style="margin: 0 0 8px 0; font-weight: 700;">{escaped(verdict)}</p>
+        <p style="margin: 0 0 14px 0; color:#444;">
+          Screened: {screened_count}<br/>
+          Operator-grade: {len(stories)}<br/>
+          Watchlist: {len(watchlist_items)}
+        </p>
+    """
+
+
+def story_fit_line(story: Dict[str, object]) -> str:
+    wedges = ", ".join(story_list_values(story, "workflow_wedges")[:3])
+    relevance_parts = [
+        f"AI/admin/data {relevance_value(story, 'ai_relevance')}",
+        f"workflow {relevance_value(story, 'healthcare_workflow_relevance')}",
+        f"operator {compact_text(story.get('operator_relevance') or 'low')}",
+    ]
+    regulatory = relevance_value(story, "regulatory_materiality")
+    if regulatory != "none":
+        relevance_parts.append(f"regulatory {regulatory}")
+    wedge_tail = f" Wedge: {wedges}." if wedges else ""
+    return f"{'; '.join(relevance_parts)}.{wedge_tail}"
+
+
+def hard_signal_line(story: Dict[str, object]) -> str:
+    evidence = [compact_text(value) for value in story_hard_signal_evidence(story)]
+    return ", ".join(evidence[:4]) if evidence else "No hard signal evidence detected."
 
 
 def render_daily_headlines(stories: List[Dict[str, object]]) -> str:
@@ -372,22 +434,26 @@ def render_daily_near_misses(
     near_miss_items: List[Dict[str, object]] | None,
     *,
     stories: List[Dict[str, object]],
+    limit: int = NEAR_MISS_LIMIT,
 ) -> str:
-    if stories or not near_miss_items:
+    del stories
+    if not near_miss_items:
         return ""
 
     rows = []
-    for item in near_miss_items[:NEAR_MISS_LIMIT]:
+    for item in near_miss_items[:limit]:
         title = compact_text(item.get("title"))
-        summary = sentence_limited(item.get("summary"), 1)
-        miss_reason = compact_text(item.get("miss_reason"))
-        if not title or not summary or not miss_reason:
+        source = compact_text(item.get("source"))
+        reason_to_watch = compact_text(item.get("reason_to_watch") or item.get("summary"))
+        why_not_selected = compact_text(item.get("why_not_selected") or item.get("miss_reason"))
+        if not title or not reason_to_watch or not why_not_selected:
             continue
         rows.append(
             f"""
             <li style="margin: 0 0 8px 0;">
-              <strong>{escaped(title)}:</strong> {escaped(summary)}
-              Did not clear the bar because {escaped(miss_reason)}.
+              <strong>{escaped(title)}</strong>{' - ' + escaped(source) if source else ''}<br/>
+              <span><strong>Reason to watch:</strong> {escaped(sentence_limited(reason_to_watch, 1))}</span><br/>
+              <span><strong>Why not selected:</strong> {escaped(sentence_limited(why_not_selected, 1))}</span>
             </li>
             """
         )
@@ -398,7 +464,7 @@ def render_daily_near_misses(
     return f"""
         <div style="margin: 4px 0 14px 0; padding-top: 4px;">
           <p style="margin: 0 0 8px 0; font-size: 12px; font-weight: 700; color:#555; letter-spacing: 0.02em;">
-            WORTH A QUICK GLANCE
+            WATCHLIST / NEAR MISSES
           </p>
           <ul style="margin: 0; padding-left: 18px; color:#333;">
             {''.join(rows)}
@@ -448,9 +514,6 @@ def render_daily_skipped_news(
 
 
 def render_daily_story_cards(stories: List[Dict[str, object]]) -> str:
-    if not stories:
-        return ""
-
     cards = []
     for story in stories:
         summary = sentence_limited(story.get("summary"), 1)
@@ -469,10 +532,12 @@ def render_daily_story_cards(stories: List[Dict[str, object]]) -> str:
                 {escaped(story_title_for_render(story))}
               </p>
               <p style="margin: 0 0 8px 0; color:#555; font-size: 13px;">
-                {escaped(story_source_confidence_line(story))}
+                {escaped(story_source_confidence_line(story))} | Category: {escaped(story.get('category', ''))}
               </p>
-              <p style="margin: 0 0 8px 0;"><strong>Summary:</strong> {escaped(summary)}</p>
+              <p style="margin: 0 0 8px 0;"><strong>What happened:</strong> {escaped(summary)}</p>
               <p style="margin: 0 0 8px 0;"><strong>Why it matters:</strong> {escaped(why_it_matters)}</p>
+              <p style="margin: 0 0 8px 0;"><strong>Hard signal detected:</strong> {escaped(hard_signal_line(story))}</p>
+              <p style="margin: 0 0 8px 0;"><strong>Why this fits the healthcare AI/workflow wedge:</strong> {escaped(story_fit_line(story))}</p>
               {action_line}
               <p style="margin: 0;">
                 <a href="{escaped(story_url_for_render(story))}" style="color:#0b57d0; text-decoration:none; font-weight:700;">Link</a>
@@ -481,10 +546,72 @@ def render_daily_story_cards(stories: List[Dict[str, object]]) -> str:
             """
         )
 
+    if not cards:
+        return """
+        <h3 style="margin: 16px 0 6px 0; font-size: 15px;">Top Signal</h3>
+        <p style="margin: 8px 0 14px 0; color:#555;">No operator-grade stories cleared today's quality bar.</p>
+        """
+
     return f"""
+        <h3 style="margin: 16px 0 6px 0; font-size: 15px;">Top Signal</h3>
         <div style="margin: 0;">
           {''.join(cards)}
         </div>
+    """
+
+
+def selection_audit_counts(
+    operator_brief: Dict[str, object],
+    selected_stories: List[Dict[str, object]],
+) -> Dict[str, int]:
+    selected_ids = {story_id_for_render(story) for story in selected_stories}
+    counts = {bucket: 0 for bucket in REJECTION_BUCKETS}
+    for story in operator_brief.get("stories", []) or []:
+        if not isinstance(story, dict):
+            continue
+        if story_id_for_render(story) in selected_ids:
+            continue
+        bucket = compact_text(story.get("rejection_bucket")) or rejection_bucket_for_story(story)
+        if bucket not in counts:
+            bucket = "Weak source/detail"
+        counts[bucket] += 1
+    return counts
+
+
+def top_rejection_label(counts: Dict[str, int]) -> str:
+    nonzero = [(bucket, count) for bucket, count in counts.items() if count > 0]
+    if not nonzero:
+        return "None"
+    bucket, count = sorted(nonzero, key=lambda entry: (entry[1], entry[0]), reverse=True)[0]
+    return f"{bucket} ({count})"
+
+
+def render_selection_audit_compact(
+    operator_brief: Dict[str, object],
+    selected_stories: List[Dict[str, object]],
+    watchlist_items: List[Dict[str, object]],
+) -> str:
+    counts = selection_audit_counts(operator_brief, selected_stories)
+    rows = [
+        f"<li>{escaped(bucket)}: {count}</li>"
+        for bucket, count in counts.items()
+    ]
+    quiet_note = ""
+    if not selected_stories:
+        best_near_miss = watchlist_items[0] if watchlist_items else {}
+        best_line = compact_text(best_near_miss.get("title")) if isinstance(best_near_miss, dict) else ""
+        quiet_note = f"""
+          <p style="margin: 0 0 8px 0; color:#555;">
+            Top rejection reason: {escaped(top_rejection_label(counts))}.
+            {'Best near-miss: ' + escaped(best_line) + '.' if best_line else 'No clean near-miss survived the watchlist floor.'}
+          </p>
+        """
+    return f"""
+        <h3 style="margin: 16px 0 6px 0; font-size: 15px;">Selection Audit</h3>
+        {quiet_note}
+        <ul style="margin: 0 0 10px 0; padding-left: 18px; color:#444;">
+          {''.join(rows)}
+        </ul>
     """
 
 
@@ -492,6 +619,7 @@ def format_daily_operator_brief_html(
     operator_brief: Dict[str, object],
     *,
     story_limit: int = DAILY_STORY_LIMIT,
+    near_miss_limit: int = NEAR_MISS_LIMIT,
     now_fn: Callable[[], object] = local_now,
 ) -> str:
     date_str = now_fn().strftime("%B %d, %Y")
@@ -500,22 +628,27 @@ def format_daily_operator_brief_html(
         story
         for story in daily_selection.get("stories", []) or []
         if isinstance(story, dict)
-    ]
-    near_miss_items = operator_brief.get("near_miss_items", []) or []
+    ][:story_limit]
+    selected_story_ids = {
+        story_id_for_render(story)
+        for story in stories
+        if story_id_for_render(story)
+    }
+    near_miss_items = [
+        item
+        for item in (operator_brief.get("near_miss_items", []) or [])
+        if isinstance(item, dict)
+        and str(item.get("story_id", "") or "") not in selected_story_ids
+    ][:near_miss_limit]
 
     html = f"""
     <html>
       <body style="font-family: Arial, sans-serif; line-height: 1.42; color: #222; max-width: 680px; margin: 0 auto; padding: 12px; background: #ffffff;">
-        <h2 style="margin: 0 0 4px 0; font-size: 22px; line-height: 1.25;">Daily AI Digest - {date_str}</h2>
-        <p style="margin: 0 0 8px 0; color:#444;">{escaped(build_daily_story_header(operator_brief, stories))}</p>
-        {render_daily_headlines(stories)}
-        {render_daily_near_misses(near_miss_items, stories=stories)}
-        {render_daily_skipped_news(
-            operator_brief.get("skipped_news_items", []) or [],
-            stories=stories,
-            near_miss_items=near_miss_items,
-        )}
+        <h2 style="margin: 0 0 4px 0; font-size: 22px; line-height: 1.25;">Daily Healthcare AI + Workflow Digest - {date_str}</h2>
+        {render_daily_verdict(operator_brief, stories, near_miss_items)}
         {render_daily_story_cards(stories)}
+        {render_daily_near_misses(near_miss_items, stories=stories, limit=near_miss_limit)}
+        {render_selection_audit_compact(operator_brief, stories, near_miss_items)}
       </body>
     </html>
     """
@@ -556,7 +689,7 @@ def format_digest_html(
     html = f"""
     <html>
       <body style="font-family: Arial, sans-serif; line-height: 1.42; color: #222; max-width: 680px; margin: 0 auto; padding: 12px;">
-        <h2 style="margin: 0 0 4px 0; font-size: 22px; line-height: 1.25;">Daily AI Digest - {date_str}</h2>
+        <h2 style="margin: 0 0 4px 0; font-size: 22px; line-height: 1.25;">Daily Healthcare AI + Workflow Digest - {date_str}</h2>
         <p style="margin: 0 0 8px 0; color:#444;">{escaped(header)}</p>
         {render_daily_headlines(stories)}
         {render_daily_story_cards(stories)}

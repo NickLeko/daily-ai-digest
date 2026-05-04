@@ -529,7 +529,7 @@ def fetch_regulatory_items(
 ) -> List[DigestItem]:
     resolved = config or current_config()
     sent_item_keys = get_sent_item_keys(config=resolved)
-    candidate_limit = regulatory_candidate_limit(resolved.regulatory_target_items)
+    candidate_limit = regulatory_candidate_limit(resolved.regulatory_candidate_limit)
     source_results = [
         fetch_openfda_regulatory_items(candidate_limit=candidate_limit),
         fetch_fda_press_release_items(candidate_limit=candidate_limit),
@@ -550,7 +550,7 @@ def fetch_regulatory_items(
     selected, selection_stats = select_regulatory_items(
         combined,
         sent_item_keys,
-        max_items=resolved.regulatory_target_items,
+        max_items=resolved.regulatory_candidate_limit,
     )
     combined_exclusions += selection_stats["excluded_reasons"]
 

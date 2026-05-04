@@ -320,8 +320,8 @@ class SelectionAuditTests(unittest.TestCase):
 
         markdown = render_selection_audit_markdown(audit)
 
-        self.assertIn("Daily digest: 4 selected (0 backfilled), 2 filtered after daily selection", markdown)
-        self.assertIn("Short-digest effect: 2 filtered by daily limit", markdown)
+        self.assertIn("Daily digest: 3 selected (0 backfilled), 3 filtered after daily selection", markdown)
+        self.assertIn("Short-digest effect: 3 filtered by daily limit", markdown)
 
     def test_selection_audit_explains_recall_surface_gate(self) -> None:
         cards = [

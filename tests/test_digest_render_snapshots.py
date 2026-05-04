@@ -86,7 +86,13 @@ def story_card(
         "action_suggestion": action_suggestion,
         "category": category,
         "workflow_wedges": ["prior auth"],
+        "operator_relevance": "high",
         "near_term_actionability": "high",
+        "story_score": 36.0 if confidence == "High" else 32.0,
+        "priority_score": 36.0 if confidence == "High" else 32.0,
+        "objective_scores": {"career": 6.8, "build": 6.9, "content": 5.8, "regulatory": 7.2},
+        "material_operator_signal": True,
+        "hard_signal_evidence": ["workflow impact"],
         "change_status": change_status,
         "signal": signal,
         "market_buckets": market_buckets,
@@ -233,7 +239,12 @@ class DigestRenderSnapshotTests(unittest.TestCase):
         daily_snapshot = normalize_rendered_html(daily_html)
         weekly_snapshot = normalize_rendered_html(weekly_html)
 
-        self.assertIn("HEADLINES", daily_snapshot)
+        self.assertIn("Daily Healthcare AI + Workflow Digest", daily_snapshot)
+        self.assertIn("Verdict", daily_snapshot)
+        self.assertIn("STRONG_SIGNAL", daily_snapshot)
+        self.assertIn("Top Signal", daily_snapshot)
+        self.assertIn("Selection Audit", daily_snapshot)
+        self.assertNotIn("HEADLINES", daily_snapshot)
         self.assertNotIn("WHAT CHANGED SINCE YESTERDAY", daily_snapshot)
         self.assertNotIn("TOP PICKS BY OBJECTIVE", daily_snapshot)
         self.assertNotIn("THESIS TRACKER", daily_snapshot)

@@ -79,6 +79,12 @@ class AppConfig:
     news_feed_urls: tuple[str, ...]
     max_items_per_category: int
     regulatory_target_items: int
+    news_candidate_limit: int
+    repo_candidate_limit: int
+    regulatory_candidate_limit: int
+    daily_story_render_limit: int
+    daily_watchlist_render_limit: int
+    daily_near_miss_render_limit: int
     local_timezone: str
     state_file_path: str
     digest_memory_file_path: str
@@ -120,6 +126,17 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         if url.strip()
     )
 
+    max_items_per_category = get_env_int(
+        "MAX_ITEMS_PER_CATEGORY",
+        env=env,
+        default=3,
+    )
+    regulatory_target_items = get_env_int(
+        "REGULATORY_TARGET_ITEMS",
+        env=env,
+        default=2,
+    )
+
     return AppConfig(
         openai_api_key=get_env("OPENAI_API_KEY", env=env, required=False, default=""),
         openai_model=openai_model,
@@ -151,15 +168,37 @@ def load_config(env: Mapping[str, str] | None = None) -> AppConfig:
         digest_mode=digest_mode,
         github_token=get_env("GITHUB_TOKEN", env=env, required=False, default=""),
         news_feed_urls=news_feed_urls,
-        max_items_per_category=get_env_int(
-            "MAX_ITEMS_PER_CATEGORY",
+        max_items_per_category=max_items_per_category,
+        regulatory_target_items=regulatory_target_items,
+        news_candidate_limit=get_env_int(
+            "NEWS_CANDIDATE_LIMIT",
+            env=env,
+            default=max(10, max_items_per_category * 4),
+        ),
+        repo_candidate_limit=get_env_int(
+            "REPO_CANDIDATE_LIMIT",
+            env=env,
+            default=max(10, max_items_per_category * 4),
+        ),
+        regulatory_candidate_limit=get_env_int(
+            "REGULATORY_CANDIDATE_LIMIT",
+            env=env,
+            default=max(8, regulatory_target_items * 4),
+        ),
+        daily_story_render_limit=get_env_int(
+            "DAILY_STORY_RENDER_LIMIT",
             env=env,
             default=3,
         ),
-        regulatory_target_items=get_env_int(
-            "REGULATORY_TARGET_ITEMS",
+        daily_watchlist_render_limit=get_env_int(
+            "DAILY_WATCHLIST_RENDER_LIMIT",
             env=env,
-            default=2,
+            default=3,
+        ),
+        daily_near_miss_render_limit=get_env_int(
+            "DAILY_NEAR_MISS_RENDER_LIMIT",
+            env=env,
+            default=3,
         ),
         local_timezone=get_env(
             "LOCAL_TIMEZONE",
@@ -271,6 +310,12 @@ GITHUB_TOKEN = _DEFAULT_CONFIG.github_token
 NEWS_FEED_URLS = list(_DEFAULT_CONFIG.news_feed_urls)
 MAX_ITEMS_PER_CATEGORY = _DEFAULT_CONFIG.max_items_per_category
 REGULATORY_TARGET_ITEMS = _DEFAULT_CONFIG.regulatory_target_items
+NEWS_CANDIDATE_LIMIT = _DEFAULT_CONFIG.news_candidate_limit
+REPO_CANDIDATE_LIMIT = _DEFAULT_CONFIG.repo_candidate_limit
+REGULATORY_CANDIDATE_LIMIT = _DEFAULT_CONFIG.regulatory_candidate_limit
+DAILY_STORY_RENDER_LIMIT = _DEFAULT_CONFIG.daily_story_render_limit
+DAILY_WATCHLIST_RENDER_LIMIT = _DEFAULT_CONFIG.daily_watchlist_render_limit
+DAILY_NEAR_MISS_RENDER_LIMIT = _DEFAULT_CONFIG.daily_near_miss_render_limit
 
 LOCAL_TIMEZONE = _DEFAULT_CONFIG.local_timezone
 STATE_FILE_PATH = _DEFAULT_CONFIG.state_file_path

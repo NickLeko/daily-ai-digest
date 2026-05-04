@@ -118,7 +118,7 @@ def fetch_github_repos(
     selected = select_scored_items(
         results,
         sent_item_keys=sent_item_keys,
-        limit=resolved.max_items_per_category,
+        limit=resolved.repo_candidate_limit,
         memory=memory,
         config=resolved,
         enforce_repo_generic_cap=True,

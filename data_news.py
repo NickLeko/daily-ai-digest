@@ -27,9 +27,10 @@ def fetch_news_items(
     if not resolved.news_feed_urls:
         excluded_reasons["no_feed_urls_configured"] += 1
 
+    entry_limit = max(10, resolved.news_candidate_limit)
     for feed_url in resolved.news_feed_urls:
         feed = feedparser.parse(feed_url)
-        entries = list(feed.entries[:10])
+        entries = list(feed.entries[:entry_limit])
 
         if getattr(feed, "bozo", 0) and not entries:
             excluded_reasons["feed_parse_error"] += 1
@@ -77,7 +78,7 @@ def fetch_news_items(
     selected = select_scored_items(
         deduped,
         sent_item_keys=sent_item_keys,
-        limit=resolved.max_items_per_category,
+        limit=resolved.news_candidate_limit,
         memory=memory,
         config=resolved,
     )

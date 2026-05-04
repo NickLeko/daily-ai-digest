@@ -37,6 +37,32 @@ SKIPPED_NEWS_BLOCKED_SUMMARY_PHRASES = {
     "soft announcement",
 }
 SIGNAL_QUALITY_RANK = {"weak": 0, "medium": 1, "strong": 2}
+RELEVANCE_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3}
+
+OPERATOR_GRADE = "OPERATOR_GRADE"
+WATCHLIST = "WATCHLIST"
+DROPPED = "DROPPED"
+
+REJECTION_BUCKETS = [
+    "PR-only",
+    "No workflow evidence",
+    "Weak AI/admin relevance",
+    "Consumer wellness only",
+    "Duplicate",
+    "Weak source/detail",
+    "Regulatory/policy watch only",
+]
+
+CONSUMER_WELLNESS_TERMS = {
+    "consumer",
+    "wellness",
+    "fitness",
+    "wearable",
+    "sleep",
+    "nutrition",
+    "meditation",
+    "mental wellness",
+}
 
 
 def normalize_text(value: str) -> str:
@@ -54,6 +80,126 @@ def story_signal_quality_label(story: Dict[str, Any]) -> str:
     if explicit in SIGNAL_QUALITY_RANK:
         return explicit
     return str(classify_mapping_materiality(story)["signal_quality"])
+
+
+def relevance_value(story: Dict[str, Any], key: str, *, default: str = "none") -> str:
+    normalized = str(story.get(key, default) or default).strip().lower()
+    if normalized in {"low", "medium", "high"}:
+        return normalized
+    matched_themes = {str(value) for value in story.get("matched_themes", []) or []}
+    if key == "healthcare_workflow_relevance":
+        if story.get("workflow_wedges"):
+            return "high"
+        if str(story.get("operator_relevance", "") or "") in {"high", "medium"}:
+            return "medium"
+    if key == "ai_relevance":
+        if matched_themes & {
+            "healthcare_admin_automation",
+            "llm_eval_rag_governance_safety",
+            "agents_workflows",
+            "healthcare_ai_pm",
+        }:
+            return "medium"
+    if key == "regulatory_materiality" and str(story.get("category", "") or "") == "Regulatory":
+        return "high"
+    return normalized if normalized in RELEVANCE_RANK else default
+
+
+def relevance_at_least(story: Dict[str, Any], key: str, minimum: str) -> bool:
+    return RELEVANCE_RANK[relevance_value(story, key)] >= RELEVANCE_RANK[minimum]
+
+
+def story_hard_signal_evidence(story: Dict[str, Any]) -> List[str]:
+    explicit = [
+        str(value)
+        for value in story.get("hard_signal_evidence", []) or []
+        if str(value).strip()
+    ]
+    if explicit:
+        return explicit
+
+    # Backward-compatible inference for older fixtures/artifacts.
+    inferred: List[str] = []
+    if story.get("material_operator_signal"):
+        if str(story.get("category", "") or "") == "Regulatory":
+            inferred.append("regulatory change")
+        if story.get("workflow_wedges"):
+            inferred.append("workflow impact")
+        if relevance_at_least(story, "regulatory_materiality", "medium"):
+            inferred.append("regulatory change")
+    return list(dict.fromkeys(inferred))
+
+
+def story_has_hard_signal(story: Dict[str, Any]) -> bool:
+    return bool(story_hard_signal_evidence(story))
+
+
+def story_text_for_reason(story: Dict[str, Any]) -> str:
+    return normalize_text(
+        " ".join(
+            str(story.get(field, "") or "")
+            for field in ("cluster_title", "title", "summary", "evidence", "why_it_matters")
+        )
+    )
+
+
+def story_is_consumer_wellness_only(story: Dict[str, Any]) -> bool:
+    text = story_text_for_reason(story)
+    if not any(term in text for term in CONSUMER_WELLNESS_TERMS):
+        return False
+    return not relevance_at_least(story, "healthcare_workflow_relevance", "medium")
+
+
+def story_has_watchlist_floor(story: Dict[str, Any]) -> bool:
+    if bool(story.get("docs_only_repo")):
+        return False
+    if story_is_consumer_wellness_only(story):
+        return False
+    if story.get("watchlist_matches"):
+        return True
+    if relevance_at_least(story, "regulatory_materiality", "medium"):
+        return True
+    if relevance_at_least(story, "healthcare_workflow_relevance", "medium"):
+        return True
+    if (
+        relevance_at_least(story, "ai_relevance", "medium")
+        and relevance_at_least(story, "healthcare_workflow_relevance", "low")
+    ):
+        return True
+    matched_themes = {str(value) for value in story.get("matched_themes", []) or []}
+    return bool(matched_themes & TARGET_THEME_KEYS)
+
+
+def story_has_operator_grade_relevance(story: Dict[str, Any]) -> bool:
+    operator_relevance = str(story.get("operator_relevance", "low") or "low")
+    actionability = str(story.get("near_term_actionability", "low") or "low")
+    workflow_strong = relevance_at_least(story, "healthcare_workflow_relevance", "high")
+    workflow_usable = relevance_at_least(story, "healthcare_workflow_relevance", "medium")
+    ai_or_data_usable = relevance_at_least(story, "ai_relevance", "medium")
+    regulatory_strong = relevance_at_least(story, "regulatory_materiality", "high")
+    hard_evidence = set(story_hard_signal_evidence(story))
+    economic_or_implementation = bool(
+        hard_evidence
+        & {
+            "regulatory change",
+            "workflow impact",
+            "reimbursement/payment effect",
+            "operational metric",
+            "governance/evaluation requirement",
+            "integration/interoperability change",
+            "staffing or org-design impact tied to technology implementation",
+        }
+    )
+
+    if not story_has_hard_signal(story):
+        return False
+    if workflow_strong and operator_relevance == "high":
+        return True
+    if workflow_usable and ai_or_data_usable and operator_relevance in {"high", "medium"}:
+        return True
+    if regulatory_strong and economic_or_implementation and actionability in {"high", "medium"}:
+        return True
+    return False
 
 
 def max_story_objective_score(story: Dict[str, Any]) -> float:
@@ -100,13 +246,15 @@ def story_has_target_fit(story: Dict[str, Any]) -> bool:
         return False
     if story_low_signal_announcement(story) or story_signal_quality_label(story) == "weak":
         return False
+    if not story_has_operator_grade_relevance(story):
+        return False
 
     if category == "Regulatory":
         regulatory_score = float((story.get("objective_scores", {}) or {}).get("regulatory", 0.0) or 0.0)
         return (
             regulatory_score >= OBJECTIVE_MIN_SCORES["regulatory"]
             or bool(workflow_wedges)
-            or operator_relevance in {"high", "medium"}
+            or operator_relevance == "high"
         )
 
     if category == "Repo":
@@ -185,6 +333,25 @@ def story_is_surface_worthy(story: Dict[str, Any]) -> bool:
     return story_surface_worthiness(story)[0]
 
 
+def story_candidate_tier(story: Dict[str, Any]) -> str:
+    if story_is_surface_worthy(story):
+        return OPERATOR_GRADE
+    if story_has_watchlist_floor(story):
+        return WATCHLIST
+    return DROPPED
+
+
+def story_tier_reason(story: Dict[str, Any]) -> str:
+    tier = story_candidate_tier(story)
+    if tier == OPERATOR_GRADE:
+        evidence = ", ".join(story_hard_signal_evidence(story)[:2]) or "hard signal evidence"
+        return f"Operator-grade fit with {evidence}."
+    reason = story_surface_worthiness_reason(story)
+    if tier == WATCHLIST:
+        return user_facing_skip_reason_for_story(story, reason)
+    return user_facing_skip_reason_for_story(story, reason)
+
+
 def compact_one_line(value: object, *, max_length: int = 220) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     if not text:
@@ -230,33 +397,88 @@ def near_miss_summary_for_story(story: Dict[str, Any]) -> str:
 
 def user_facing_skip_reason_for_story(story: Dict[str, Any], rejection_reason: str) -> str:
     reason = str(rejection_reason or "").lower()
+    if story_is_consumer_wellness_only(story):
+        return "Consumer wellness feature; no payer, provider, reimbursement, or clinical workflow tie-in."
     if story_low_signal_announcement(story) or "soft announcement" in reason:
-        return "it was still an early announcement without concrete deployment or workflow evidence"
+        return "PR-only announcement; no deployment, customer, metric, or workflow evidence."
     if story_signal_quality_label(story) == "weak" or "signal quality is weak" in reason:
-        return "the signal was still too weak"
+        if relevance_at_least(story, "healthcare_workflow_relevance", "medium"):
+            return "Healthcare workflow topic, but no deployment, customer, operational metric, or implementation evidence."
+        return "Generic AI commentary without evidence of adoption, evaluation, governance, or workflow impact."
+    if str(story.get("candidate_tier", "") or "") == WATCHLIST and str(story.get("category", "") or "") == "Regulatory":
+        return "Regulatory topic worth monitoring, but no near-term operational change detected."
+    if str(story.get("category", "") or "") == "Regulatory" and not story_has_operator_grade_relevance(story):
+        return "Regulatory topic worth monitoring, but no near-term operational change detected."
+    if (
+        relevance_at_least(story, "healthcare_workflow_relevance", "medium")
+        and not relevance_at_least(story, "ai_relevance", "medium")
+        and not story_has_hard_signal(story)
+    ):
+        return "Healthcare ops relevance present, but AI/admin automation relevance was weak."
     if "regulatory story score" in reason:
-        return "regulatory usefulness stayed below the operator-grade threshold"
+        return "Regulatory topic worth monitoring, but no near-term operational change detected."
     if "recall/enforcement" in reason:
-        return "the recall/enforcement angle lacked a stronger workflow signal"
+        return "Recall/enforcement item lacks workflow, reimbursement, implementation, or AI governance consequence."
     if "corroborating support" in reason or "reliability is low" in reason:
-        return "source support was too thin"
+        return "Weak source/detail; no corroborating source or implementation detail."
     if "target-fit" in reason:
-        return "operator fit was too indirect"
+        if not relevance_at_least(story, "healthcare_workflow_relevance", "medium"):
+            return "No workflow evidence; payer, provider, RCM, prior-auth, interoperability, or admin-ops tie was not concrete."
+        if not relevance_at_least(story, "ai_relevance", "medium"):
+            return "Healthcare ops relevance present, but AI/admin automation relevance was weak."
+        return "Strong topic fit, but no hard evidence of deployment, customer, metric, regulatory change, or workflow impact."
     if "score/objective" in reason or "threshold" in reason:
-        return "score and objective evidence stayed below the operator-grade threshold"
-    return "evidence was not strong enough for the main digest"
+        return "Strong topic fit, but no hard evidence of deployment, customer, metric, regulatory change, or workflow impact."
+    return "Weak source/detail; no concrete adoption, workflow, implementation, or economic evidence."
 
 
 def near_miss_reason_for_story(story: Dict[str, Any], rejection_reason: str) -> str:
     return user_facing_skip_reason_for_story(story, rejection_reason)
 
 
+def rejection_bucket_for_story(story: Dict[str, Any], rejection_reason: str = "") -> str:
+    reason = str(rejection_reason or story.get("tier_reason", "") or "").lower()
+    if "duplicate" in reason or str(story.get("change_status", "") or "") == "repeated":
+        return "Duplicate"
+    if story_is_consumer_wellness_only(story):
+        return "Consumer wellness only"
+    if "pr-only" in reason or story_low_signal_announcement(story):
+        return "PR-only"
+    if (
+        str(story.get("category", "") or "") == "Regulatory"
+        and story_candidate_tier(story) == WATCHLIST
+    ):
+        return "Regulatory/policy watch only"
+    if (
+        relevance_at_least(story, "healthcare_workflow_relevance", "medium")
+        and not relevance_at_least(story, "ai_relevance", "medium")
+    ):
+        return "Weak AI/admin relevance"
+    if not relevance_at_least(story, "healthcare_workflow_relevance", "medium"):
+        return "No workflow evidence"
+    if "source" in reason or "detail" in reason or "corroborating" in reason:
+        return "Weak source/detail"
+    return "Weak source/detail"
+
+
+def watch_reason_for_story(story: Dict[str, Any]) -> str:
+    if story.get("watchlist_matches"):
+        return "Matched a saved watchlist topic or repo."
+    if str(story.get("category", "") or "") == "Regulatory":
+        return "Policy or regulatory item may affect future implementation planning."
+    if relevance_at_least(story, "ai_relevance", "medium") and relevance_at_least(
+        story,
+        "healthcare_workflow_relevance",
+        "medium",
+    ):
+        return "Strong healthcare AI/workflow topic fit, but evidence is not operator-grade yet."
+    if relevance_at_least(story, "healthcare_workflow_relevance", "medium"):
+        return "Healthcare workflow topic worth monitoring for deployment or economic proof."
+    return "Topic is adjacent to the digest scope but lacks enough proof for a top signal."
+
+
 def story_has_near_miss_floor(story: Dict[str, Any]) -> bool:
-    if story_low_signal_announcement(story):
-        return False
-    if story_signal_quality_label(story) == "weak":
-        return False
-    if not story_has_target_fit(story):
+    if not story_has_watchlist_floor(story):
         return False
     if story.get("reliability_label") == "Low" and int(story.get("supporting_item_count", 0) or 0) < 2:
         return False
@@ -327,6 +549,7 @@ def build_near_miss_items(
         summary = near_miss_summary_for_story(story)
         if not summary:
             continue
+        miss_reason = near_miss_reason_for_story(story, rejection_reason)
 
         candidates.append(
             (
@@ -336,8 +559,12 @@ def build_near_miss_items(
                     "title": str(story.get("cluster_title", "") or story.get("title", "") or "Untitled story"),
                     "source": str(story.get("source", "") or ""),
                     "summary": summary,
-                    "miss_reason": near_miss_reason_for_story(story, rejection_reason),
+                    "reason_to_watch": watch_reason_for_story(story),
+                    "why_not_selected": miss_reason,
+                    "miss_reason": miss_reason,
                     "rejection_reason": rejection_reason,
+                    "rejection_bucket": rejection_bucket_for_story(story, rejection_reason),
+                    "candidate_tier": WATCHLIST,
                     "story_score": round(float(story.get("story_score", 0.0) or 0.0), 2),
                     "max_objective_score": round(max_story_objective_score(story), 2),
                     "signal_quality": story_signal_quality_label(story),
@@ -412,6 +639,7 @@ def build_skipped_news_items(
         summary = skipped_news_summary_for_story(story)
         if not summary:
             continue
+        skip_reason = user_facing_skip_reason_for_story(story, rejection_reason)
 
         candidates.append(
             (
@@ -421,8 +649,10 @@ def build_skipped_news_items(
                     "title": str(story.get("cluster_title", "") or story.get("title", "") or "Untitled story"),
                     "source": str(story.get("source", "") or ""),
                     "summary": summary,
-                    "skip_reason": user_facing_skip_reason_for_story(story, rejection_reason),
+                    "skip_reason": skip_reason,
                     "rejection_reason": rejection_reason,
+                    "rejection_bucket": rejection_bucket_for_story(story, rejection_reason),
+                    "candidate_tier": DROPPED,
                     "story_score": round(float(story.get("story_score", 0.0) or 0.0), 2),
                     "max_objective_score": round(max_story_objective_score(story), 2),
                     "signal_quality": story_signal_quality_label(story),

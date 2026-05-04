@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-from selection_policy import DAILY_STORY_LIMIT
+from selection_policy import DAILY_STORY_LIMIT, NEAR_MISS_LIMIT
 from state import local_now as _state_local_now
 
 from formatter_daily import (
@@ -82,10 +82,12 @@ def format_daily_operator_brief_html(
     operator_brief: Dict[str, object],
     *,
     story_limit: int = DAILY_STORY_LIMIT,
+    near_miss_limit: int = NEAR_MISS_LIMIT,
 ) -> str:
     return _format_daily_operator_brief_html(
         operator_brief,
         story_limit=story_limit,
+        near_miss_limit=near_miss_limit,
         now_fn=local_now,
     )
 
@@ -99,10 +101,15 @@ def format_operator_brief_html(
     *,
     mode: str = "daily",
     story_limit: int = DAILY_STORY_LIMIT,
+    near_miss_limit: int = NEAR_MISS_LIMIT,
 ) -> str:
     normalized_mode = compact_text(mode).lower() or "daily"
     if normalized_mode == "daily":
-        return format_daily_operator_brief_html(operator_brief, story_limit=story_limit)
+        return format_daily_operator_brief_html(
+            operator_brief,
+            story_limit=story_limit,
+            near_miss_limit=near_miss_limit,
+        )
     if normalized_mode == "weekly":
         return format_weekly_operator_brief_html(operator_brief)
     raise ValueError("mode must be 'daily' or 'weekly'.")

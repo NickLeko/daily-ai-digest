@@ -1,25 +1,35 @@
 <html>
   <body>
     <h2>
-      Daily AI Digest - April 09, 2026
+      Daily Healthcare AI + Workflow Digest - April 09, 2026
     </h2>
+    <h3>
+      Verdict
+    </h3>
     <p>
-      3 stories selected from 6 screened items (1 repo, 1 news item, 1 regulatory update).
+      STRONG_SIGNAL
     </p>
     <p>
-      HEADLINES
+      Screened: 6
+      <br />
+      Operator-grade: 3
+      <br />
+      Watchlist: 0
     </p>
+    <h3>
+      Top Signal
+    </h3>
     <div>
       <div>
         <p>
           CMS final rule tightens prior auth evidence exchange
         </p>
         <p>
-          CMS Newsroom, Federal Register | Confidence: High
+          CMS Newsroom, Federal Register | Confidence: High | Category: Regulatory
         </p>
         <p>
           <strong>
-            Summary:
+            What happened:
           </strong>
           CMS final rule tightens prior auth evidence exchange summary.
         </p>
@@ -28,6 +38,18 @@
             Why it matters:
           </strong>
           CMS final rule tightens prior auth evidence exchange matters to operator planning.
+        </p>
+        <p>
+          <strong>
+            Hard signal detected:
+          </strong>
+          workflow impact
+        </p>
+        <p>
+          <strong>
+            Why this fits the healthcare AI/workflow wedge:
+          </strong>
+          AI/admin/data none; workflow high; operator high; regulatory high. Wedge: prior auth.
         </p>
         <p>
           <strong>
@@ -46,11 +68,11 @@
           Audit-lane repo packages prior-auth evidence checks
         </p>
         <p>
-          GitHub Search | Confidence: High
+          GitHub Search | Confidence: High | Category: Repo
         </p>
         <p>
           <strong>
-            Summary:
+            What happened:
           </strong>
           Audit-lane repo packages prior-auth evidence checks summary.
         </p>
@@ -59,6 +81,18 @@
             Why it matters:
           </strong>
           Audit-lane repo packages prior-auth evidence checks matters to operator planning.
+        </p>
+        <p>
+          <strong>
+            Hard signal detected:
+          </strong>
+          workflow impact
+        </p>
+        <p>
+          <strong>
+            Why this fits the healthcare AI/workflow wedge:
+          </strong>
+          AI/admin/data none; workflow high; operator high. Wedge: prior auth.
         </p>
         <p>
           <strong>
@@ -77,11 +111,11 @@
           Payer operations roles ask for AI governance fluency
         </p>
         <p>
-          Healthcare Jobs Weekly | Confidence: Medium
+          Healthcare Jobs Weekly | Confidence: Medium | Category: News
         </p>
         <p>
           <strong>
-            Summary:
+            What happened:
           </strong>
           Payer operations roles ask for AI governance fluency summary.
         </p>
@@ -92,11 +126,49 @@
           Payer operations roles ask for AI governance fluency matters to operator planning.
         </p>
         <p>
+          <strong>
+            Hard signal detected:
+          </strong>
+          workflow impact
+        </p>
+        <p>
+          <strong>
+            Why this fits the healthcare AI/workflow wedge:
+          </strong>
+          AI/admin/data none; workflow high; operator high. Wedge: prior auth.
+        </p>
+        <p>
           <a href="https://example.com/career/payer-ai-governance">
             Link
           </a>
         </p>
       </div>
     </div>
+    <h3>
+      Selection Audit
+    </h3>
+    <ul>
+      <li>
+        PR-only: 0
+      </li>
+      <li>
+        No workflow evidence: 0
+      </li>
+      <li>
+        Weak AI/admin relevance: 0
+      </li>
+      <li>
+        Consumer wellness only: 0
+      </li>
+      <li>
+        Duplicate: 0
+      </li>
+      <li>
+        Weak source/detail: 0
+      </li>
+      <li>
+        Regulatory/policy watch only: 0
+      </li>
+    </ul>
   </body>
 </html>

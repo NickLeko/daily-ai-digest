@@ -18,6 +18,7 @@ from operator_brief import (
     story_surface_worthiness,
     story_surface_worthiness_reason,
 )
+from operator_brief_selection import REJECTION_BUCKETS, rejection_bucket_for_story
 from selection_policy import DAILY_STORY_LIMIT, confidence_display_for_story
 from state import local_now
 from storage import write_json_file
@@ -289,9 +290,23 @@ def build_story_audit(operator_brief: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "passes": target_fit,
                     "operator_relevance": str(story.get("operator_relevance", "") or ""),
                     "near_term_actionability": str(story.get("near_term_actionability", "") or ""),
+                    "ai_relevance": str(story.get("ai_relevance", "") or ""),
+                    "healthcare_workflow_relevance": str(
+                        story.get("healthcare_workflow_relevance", "") or ""
+                    ),
+                    "regulatory_materiality": str(story.get("regulatory_materiality", "") or ""),
+                    "hard_signal_evidence": [
+                        str(value) for value in story.get("hard_signal_evidence", []) or []
+                    ],
                     "workflow_wedges": [str(value) for value in story.get("workflow_wedges", []) or []],
                     "matched_themes": [str(value) for value in story.get("matched_themes", []) or []],
                 },
+                "candidate_tier": str(story.get("candidate_tier", "") or ""),
+                "tier_reason": str(story.get("tier_reason", "") or ""),
+                "rejection_bucket": rejection_bucket_for_story(
+                    story,
+                    story_surface_worthiness_reason(story),
+                ),
                 "score_summary": score_summary(story),
                 "materiality": {
                     "signal_quality": str(story.get("signal_quality", "") or ""),
@@ -363,9 +378,19 @@ def build_item_audit(
                     "passes": bool((story.get("target_fit", {}) or {}).get("passes", False)),
                     "operator_relevance": str(item.get("operator_relevance", "") or ""),
                     "near_term_actionability": str(item.get("near_term_actionability", "") or ""),
+                    "ai_relevance": str(item.get("ai_relevance", "") or ""),
+                    "healthcare_workflow_relevance": str(
+                        item.get("healthcare_workflow_relevance", "") or ""
+                    ),
+                    "regulatory_materiality": str(item.get("regulatory_materiality", "") or ""),
+                    "hard_signal_evidence": [
+                        str(value) for value in item.get("hard_signal_evidence", []) or []
+                    ],
                     "workflow_wedges": [str(value) for value in item.get("workflow_wedges", []) or []],
                     "matched_themes": [str(value) for value in item.get("matched_themes", []) or []],
                 },
+                "candidate_tier": str(story.get("candidate_tier", "") or ""),
+                "rejection_bucket": str(story.get("rejection_bucket", "") or ""),
                 "score_summary": score_summary(item),
                 "materiality": {
                     "signal_quality": str(item.get("signal_quality", "") or ""),
@@ -414,6 +439,11 @@ def build_selection_audit(operator_brief: Dict[str, Any]) -> Dict[str, Any]:
         for item in (operator_brief.get("skipped_news_items", []) or [])
         if isinstance(item, dict)
     ]
+    rejection_counts = Counter(
+        str(row.get("rejection_bucket", "Weak source/detail") or "Weak source/detail")
+        for row in story_rows
+        if not row.get("selected")
+    )
     return {
         "version": 1,
         "generated_at": local_now().isoformat(),
@@ -436,6 +466,10 @@ def build_selection_audit(operator_brief: Dict[str, Any]) -> Dict[str, Any]:
             "fallback_candidates": {
                 "near_miss_candidate_count": len(near_miss_items),
                 "skipped_news_candidate_count": len(skipped_news_items),
+            },
+            "rejection_reason_counts": {
+                bucket: int(rejection_counts.get(bucket, 0))
+                for bucket in REJECTION_BUCKETS
             },
         },
         "stories": story_rows,
@@ -569,6 +603,19 @@ def story_selection_diagnostic(
         "materiality_tier": str((row.get("materiality", {}) or {}).get("materiality_tier", "") or story.get("signal_quality", "")),
         "materiality_reason": str((row.get("materiality", {}) or {}).get("materiality_reason", "") or story.get("materiality_reason", "")),
         "operator_relevance": str((row.get("target_fit", {}) or {}).get("operator_relevance", "") or story.get("operator_relevance", "")),
+        "ai_relevance": str((row.get("target_fit", {}) or {}).get("ai_relevance", "") or story.get("ai_relevance", "")),
+        "healthcare_workflow_relevance": str(
+            (row.get("target_fit", {}) or {}).get("healthcare_workflow_relevance", "")
+            or story.get("healthcare_workflow_relevance", "")
+        ),
+        "regulatory_materiality": str(
+            (row.get("target_fit", {}) or {}).get("regulatory_materiality", "")
+            or story.get("regulatory_materiality", "")
+        ),
+        "hard_signal_evidence": (row.get("target_fit", {}) or {}).get("hard_signal_evidence", [])
+        or story.get("hard_signal_evidence", []),
+        "candidate_tier": str(row.get("candidate_tier", "") or story.get("candidate_tier", "")),
+        "rejection_bucket": str(row.get("rejection_bucket", "") or story.get("rejection_bucket", "")),
         "confidence": str(row.get("confidence", "") or story.get("confidence", "")),
         "confidence_display": str(row.get("confidence_display", "") or story.get("confidence_display", "")),
         "confidence_override_reason": str(
@@ -633,9 +680,13 @@ def target_fit_label(row: Dict[str, Any]) -> str:
     status = "pass" if target_fit.get("passes") else "fail"
     operator_relevance = target_fit.get("operator_relevance", "")
     actionability = target_fit.get("near_term_actionability", "")
+    ai_relevance = target_fit.get("ai_relevance", "")
+    workflow_relevance = target_fit.get("healthcare_workflow_relevance", "")
     wedges = ", ".join(target_fit.get("workflow_wedges", []) or [])
     suffix = f"; {wedges}" if wedges else ""
-    return f"{status}; relevance={operator_relevance}; actionability={actionability}{suffix}"
+    ai_suffix = f"; ai={ai_relevance}" if ai_relevance else ""
+    workflow_suffix = f"; workflow={workflow_relevance}" if workflow_relevance else ""
+    return f"{status}; relevance={operator_relevance}; actionability={actionability}{ai_suffix}{workflow_suffix}{suffix}"
 
 
 def daily_label(row: Dict[str, Any]) -> str:
@@ -787,6 +838,14 @@ def render_selection_audit_markdown(audit: Dict[str, Any]) -> str:
     if reason_counts:
         for reason, count in reason_counts.most_common(5):
             lines.append(f"- {count}x {compact_reason(reason)}")
+    else:
+        lines.append("- None.")
+
+    rejection_summary = (audit.get("summary", {}) or {}).get("rejection_reason_counts", {}) or {}
+    lines.extend(["", "## Rejection Buckets"])
+    if rejection_summary:
+        for bucket in REJECTION_BUCKETS:
+            lines.append(f"- {bucket}: {int(rejection_summary.get(bucket, 0) or 0)}")
     else:
         lines.append("- None.")
 

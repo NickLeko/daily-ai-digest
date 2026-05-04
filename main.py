@@ -163,7 +163,15 @@ def run(
     log_selection_diagnostics(selection_diagnostics)
 
     log(f"Formatting {digest_mode} HTML email...")
-    html = format_operator_brief_html(operator_brief, mode=digest_mode)
+    html = format_operator_brief_html(
+        operator_brief,
+        mode=digest_mode,
+        story_limit=resolved.daily_story_render_limit,
+        near_miss_limit=min(
+            resolved.daily_watchlist_render_limit,
+            resolved.daily_near_miss_render_limit,
+        ),
+    )
     cockpit_html = format_operator_cockpit_html(operator_brief)
 
     subject_prefix = (
@@ -171,7 +179,11 @@ def run(
         if resolved.email_subject_prefix.strip()
         else ""
     )
-    subject_label = "Weekly AI Digest" if digest_mode == "weekly" else "Daily AI Digest"
+    subject_label = (
+        "Weekly Healthcare AI + Workflow Digest"
+        if digest_mode == "weekly"
+        else "Daily Healthcare AI + Workflow Digest"
+    )
     subject = f"{subject_prefix}{subject_label} - {local_now(config=resolved).strftime('%Y-%m-%d')}"
 
     save_artifacts(operator_brief, html, cockpit_html, config=resolved)

@@ -328,6 +328,212 @@ SPECULATIVE_LOW_ROI_KEYWORDS = [
     "could someday",
 ]
 
+AI_RELEVANCE_KEYWORDS = [
+    "ai",
+    "artificial intelligence",
+    "machine learning",
+    "ml",
+    "llm",
+    "large language model",
+    "generative ai",
+    "model",
+    "algorithm",
+    "agent",
+    "agentic",
+    "copilot",
+    "ambient",
+    "scribe",
+    "automation",
+    "autonomous",
+    "rag",
+    "retrieval",
+    "evaluation",
+    "eval",
+    "benchmark",
+    "governance",
+    "guardrail",
+]
+
+DATA_INFRA_RELEVANCE_KEYWORDS = [
+    "fhir",
+    "hl7",
+    "tefca",
+    "uscdi",
+    "api",
+    "apis",
+    "data exchange",
+    "interoperability",
+    "integration",
+    "claims attachments",
+    "electronic signatures",
+]
+
+HARD_SIGNAL_EVIDENCE_RULES = {
+    "real deployment": [
+        "deployed at",
+        "launched across",
+        "implemented by",
+        "live in production",
+        "rolled out to",
+        "used by",
+        "adopted by",
+        "operational deployment",
+        "production deployment",
+    ],
+    "named customer/provider/payer": [
+        "named customer",
+        "enterprise customer",
+    ],
+    "regulatory change": [
+        "final rule",
+        "proposed rule",
+        "guidance",
+        "deadline",
+        "compliance date",
+        "mandate",
+        "required",
+        "requirements",
+        "information blocking",
+        "health it certification",
+    ],
+    "workflow impact": [
+        "turnaround",
+        "throughput",
+        "manual work",
+        "status visibility",
+        "workflow automation",
+        "handoff",
+        "denial",
+        "denials",
+        "appeal",
+        "appeals",
+    ],
+    "reimbursement/payment effect": [
+        "reimbursement",
+        "payment",
+        "payment rule",
+        "coverage determination",
+        "claims",
+        "billing",
+        "write-off",
+        "recoveries",
+    ],
+    "operational metric": [
+        "roi",
+        "reduction",
+        "savings",
+        "cycle time",
+        "fill rate",
+        "template utilization",
+        "adoption",
+    ],
+    "governance/evaluation requirement": [
+        "evaluation",
+        "eval",
+        "benchmark",
+        "audit",
+        "monitoring",
+        "safety",
+        "privacy",
+        "security",
+        "governance",
+        "guardrail",
+    ],
+    "integration/interoperability change": [
+        "integration",
+        "interoperability",
+        "fhir",
+        "hl7",
+        "tefca",
+        "uscdi",
+        "api",
+        "apis",
+        "data exchange",
+        "claims attachments",
+        "electronic signatures",
+    ],
+    "staffing or org-design impact tied to technology implementation": [
+        "staffing",
+        "training",
+        "workforce",
+        "implementation team",
+        "operating model",
+        "org design",
+        "center of excellence",
+    ],
+}
+
+HARD_SIGNAL_NEGATION_RULES = {
+    "real deployment": [
+        "no deployment",
+        "did not name deployment",
+        "has not deployed",
+        "not yet deployed",
+        "without deployment",
+        "lacks deployment",
+        "previewed only",
+        "announced only",
+    ],
+    "named customer/provider/payer": [
+        "no customer",
+        "no named customer",
+        "did not name customer",
+        "did not name deployment",
+        "without customer",
+        "lacks customer",
+        "previewed only",
+        "announced only",
+    ],
+    "operational metric": [
+        "no outcomes",
+        "no operational metric",
+        "did not name outcomes",
+        "without outcomes",
+        "without reported outcomes",
+        "lacks outcomes",
+        "previewed only",
+        "announced only",
+    ],
+}
+
+DEPLOYMENT_LANGUAGE_PATTERN = (
+    r"deployed|deploys|launched across|implemented|implements|"
+    r"rolled out|used|uses|adopted|adopts|live in production|"
+    r"operational deployment|production deployment"
+)
+PROPER_NOUN_ENTITY_PATTERN = r"[A-Z][A-Za-z&.-]+(?:\s+[A-Z][A-Za-z&.-]+){1,6}"
+EXPLICIT_NAMED_CUSTOMER_PATTERNS = [
+    r"\bnamed customer\b",
+    r"\bcustomer\s+[A-Z][A-Za-z0-9&.-]+",
+    r"\bprovider\s+[A-Z][A-Za-z0-9&.-]+",
+    r"\bpayer\s+[A-Z][A-Za-z0-9&.-]+",
+    r"\bhealth system\s+[A-Z][A-Za-z0-9&.-]+",
+    rf"\bdeployed at\s+{PROPER_NOUN_ENTITY_PATTERN}",
+    rf"\bimplemented by\s+{PROPER_NOUN_ENTITY_PATTERN}",
+    rf"\bused by\s+{PROPER_NOUN_ENTITY_PATTERN}",
+    rf"\badopted by\s+{PROPER_NOUN_ENTITY_PATTERN}",
+]
+
+REGULATORY_HIGH_MATERIALITY_KEYWORDS = [
+    "final rule",
+    "proposed rule",
+    "interim final rule",
+    "deadline",
+    "compliance date",
+    "mandate",
+    "required",
+    "requirements",
+    "payment rule",
+]
+
+
+def relevance_level(hit_count: int, *, high_at: int = 2) -> str:
+    if hit_count <= 0:
+        return "none"
+    if hit_count >= high_at:
+        return "high"
+    return "medium"
+
 def normalize_text(value: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", (value or "").lower()))
 
@@ -346,6 +552,75 @@ def keyword_matches_text(keyword: str, text: str) -> bool:
 
 def matched_keywords(keywords: List[str], text: str) -> List[str]:
     return [keyword for keyword in keywords if keyword_matches_text(keyword, text)]
+
+
+def hard_signal_is_negated(text: str, evidence_type: str) -> bool:
+    return bool(matched_keywords(HARD_SIGNAL_NEGATION_RULES.get(evidence_type, []), text))
+
+
+def named_customer_provider_payer_evidence(text: str) -> bool:
+    if hard_signal_is_negated(text, "named customer/provider/payer"):
+        return False
+    if any(re.search(pattern, text) for pattern in EXPLICIT_NAMED_CUSTOMER_PATTERNS):
+        return True
+    forward = rf"\b{PROPER_NOUN_ENTITY_PATTERN}\b.{{0,90}}\b(?:{DEPLOYMENT_LANGUAGE_PATTERN})\b"
+    reverse = rf"\b(?:{DEPLOYMENT_LANGUAGE_PATTERN})\b.{{0,90}}\b{PROPER_NOUN_ENTITY_PATTERN}\b"
+    return bool(re.search(forward, text) or re.search(reverse, text))
+
+
+def hard_signal_evidence_types(text: str) -> List[str]:
+    evidence: List[str] = []
+    for evidence_type, keywords in HARD_SIGNAL_EVIDENCE_RULES.items():
+        if evidence_type == "named customer/provider/payer":
+            if named_customer_provider_payer_evidence(text):
+                evidence.append(evidence_type)
+            continue
+        if hard_signal_is_negated(text, evidence_type):
+            continue
+        if matched_keywords(keywords, text):
+            evidence.append(evidence_type)
+    return evidence
+
+
+def ai_relevance_level(text: str) -> str:
+    ai_hits = matched_keywords(AI_RELEVANCE_KEYWORDS, text)
+    data_infra_hits = matched_keywords(DATA_INFRA_RELEVANCE_KEYWORDS, text)
+    if len(ai_hits) >= 2 or (ai_hits and data_infra_hits):
+        return "high"
+    if ai_hits:
+        return "medium"
+    if data_infra_hits:
+        return "medium"
+    return "none"
+
+
+def healthcare_workflow_relevance_level(
+    text: str,
+    *,
+    wedge_hits: Dict[str, List[str]],
+) -> str:
+    workflow_hits = sum(len(hits) for hits in wedge_hits.values())
+    healthcare_hits = len(matched_keywords(HEALTHCARE_CONTEXT_KEYWORDS, text))
+    operator_hits = len(matched_keywords(BUYER_OPERATOR_KEYWORDS, text))
+    if workflow_hits >= 2 or (workflow_hits and operator_hits):
+        return "high"
+    if workflow_hits or (healthcare_hits and operator_hits):
+        return "medium"
+    if healthcare_hits:
+        return "low"
+    return "none"
+
+
+def regulatory_materiality_level(text: str, *, category: str = "") -> str:
+    high_hits = matched_keywords(REGULATORY_HIGH_MATERIALITY_KEYWORDS, text)
+    regulatory_hits = matched_keywords(REGULATORY_KEYWORDS, text)
+    if high_hits:
+        return "high"
+    if len(regulatory_hits) >= 2:
+        return "medium"
+    if regulatory_hits or category == "Regulatory":
+        return "low"
+    return "none"
 
 
 def item_text_blob(item: DigestItem) -> str:
@@ -583,6 +858,7 @@ def build_item_profile(
         text,
         category=str(item.get("category", "") or ""),
     )
+    category = str(item.get("category", "") or "")
     interoperability_hits = matched_keywords(INTEROPERABILITY_REIMBURSEMENT_KEYWORDS, text)
     generic_devtool = is_generic_devtool_item(
         item,
@@ -617,6 +893,13 @@ def build_item_profile(
             materiality=materiality,
         ),
         "explicit_interoperability_reimbursement": bool(interoperability_hits),
+        "ai_relevance": ai_relevance_level(text),
+        "healthcare_workflow_relevance": healthcare_workflow_relevance_level(
+            text,
+            wedge_hits=wedge_hits,
+        ),
+        "regulatory_materiality": regulatory_materiality_level(text, category=category),
+        "hard_signal_evidence": hard_signal_evidence_types(text),
         "is_generic_devtool": generic_devtool,
         "generic_repo_cap_exempt": generic_repo_cap_exempt,
         "is_coding_agent_tool": bool(matched_keywords(CODING_AGENT_TOOLING_KEYWORDS, text)),
@@ -877,6 +1160,10 @@ def score_item(
         "workflow_wedges": item_profile.get("workflow_wedges", []),
         "operator_relevance": item_profile.get("operator_relevance", "low"),
         "near_term_actionability": item_profile.get("near_term_actionability", "low"),
+        "ai_relevance": item_profile.get("ai_relevance", "none"),
+        "healthcare_workflow_relevance": item_profile.get("healthcare_workflow_relevance", "none"),
+        "regulatory_materiality": item_profile.get("regulatory_materiality", "none"),
+        "hard_signal_evidence": item_profile.get("hard_signal_evidence", []),
         "explicit_healthcare_context": bool(item_profile.get("explicit_healthcare_context")),
         "explicit_interoperability_reimbursement": bool(
             item_profile.get("explicit_interoperability_reimbursement")
