@@ -518,7 +518,6 @@ CAPABILITY_MATERIAL_KEYWORDS = [
     "model",
     "clearance",
     "authorized",
-    "authorization",
     "approval",
     "clinical validation",
     "validated",

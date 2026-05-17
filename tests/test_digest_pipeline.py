@@ -1958,6 +1958,91 @@ class SignalQualityGateTests(unittest.TestCase):
         self.assertTrue(all(story["signal_quality"] == "weak" for story in brief["stories"]))
         self.assertTrue(all(story["selection_penalties"] for story in brief["stories"]))
 
+    def test_pr_only_ai_workflow_partnership_does_not_surface_without_proof(self) -> None:
+        now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
+        item = {
+            "category": "News",
+            "title": "Vendor announces AI partnership for prior authorization workflow automation",
+            "url": "https://example.com/news/vendor-ai-prior-auth-partnership",
+            "raw_text": (
+                "Vendor announced a partnership to bring AI agents to prior authorization workflow automation "
+                "for payer teams, but did not name a deployment, customer, metric, or production rollout."
+            ),
+            "item_key": "news::vendor-prior-auth-partnership",
+            "published_at": now - timedelta(hours=1),
+            "source": "Healthcare IT News",
+        }
+
+        scored = attach_priority_scores([item], {"version": 1, "events": []}, now=now)
+
+        self.assertEqual(scored[0]["signal_quality"], "weak")
+        self.assertTrue(scored[0]["low_signal_announcement"])
+        self.assertFalse(scored[0]["material_operator_signal"])
+        self.assertEqual(scored[0]["hard_signal_evidence"], [])
+
+        with patch(
+            "operator_brief.build_strategy_brief",
+            return_value={
+                "top_insight": "",
+                "content_angle": "",
+                "build_idea": "",
+                "interview_talking_point": "",
+                "watch_item": "",
+            },
+        ):
+            brief = build_operator_brief_artifact(
+                scored,
+                memory={"version": 2, "events": [], "daily_briefs": []},
+                memory_snapshot={},
+            )
+
+        self.assertEqual(brief["summary"]["story_card_count"], 0)
+        self.assertEqual(select_daily_stories(brief), [])
+        self.assertEqual(brief["stories"][0]["candidate_tier"], WATCHLIST)
+        self.assertIn("PR-only announcement", brief["stories"][0]["tier_reason"])
+
+    def test_named_provider_workflow_metric_story_still_surfaces(self) -> None:
+        now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
+        item = {
+            "category": "News",
+            "title": "North Valley Health deploys prior auth AI to cut denial rework",
+            "url": "https://example.com/news/north-valley-prior-auth-ai",
+            "raw_text": (
+                "Acme deployed at North Valley Health a prior authorization AI workflow across its payer "
+                "evidence queue, reducing denial rework by 18 percent and improving turnaround "
+                "for provider operations."
+            ),
+            "item_key": "news::north-valley-prior-auth-ai",
+            "published_at": now - timedelta(hours=1),
+            "source": "Healthcare IT News",
+        }
+
+        scored = attach_priority_scores([item], {"version": 1, "events": []}, now=now)
+
+        self.assertEqual(scored[0]["signal_quality"], "strong")
+        self.assertIn("real deployment", scored[0]["hard_signal_evidence"])
+        self.assertIn("named customer/provider/payer", scored[0]["hard_signal_evidence"])
+
+        with patch(
+            "operator_brief.build_strategy_brief",
+            return_value={
+                "top_insight": "Named provider workflow evidence should beat generic AI launch noise.",
+                "content_angle": "",
+                "build_idea": "",
+                "interview_talking_point": "",
+                "watch_item": "",
+            },
+        ):
+            brief = build_operator_brief_artifact(
+                scored,
+                memory={"version": 2, "events": [], "daily_briefs": []},
+                memory_snapshot={},
+            )
+
+        self.assertEqual(brief["summary"]["story_card_count"], 1)
+        self.assertEqual(brief["story_cards"][0]["candidate_tier"], OPERATOR_GRADE)
+        self.assertEqual(select_daily_stories(brief)[0]["cluster_title"], item["title"])
+
     def test_strong_healthcare_policy_story_still_passes(self) -> None:
         now = datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc)
         item = {

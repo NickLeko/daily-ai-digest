@@ -11,7 +11,7 @@ from config import (
 )
 from memory import DigestMemory, build_history_context
 from selection_policy import ITEM_OBJECTIVE_MIN_SCORES
-from signal_quality import classify_operator_materiality
+from signal_quality import classify_operator_materiality, deployment_proof_is_negated
 from taxonomy import PRIORITY_THEME_RULES, TRACKED_ENTITY_RULES, WORKFLOW_RULES
 
 
@@ -555,6 +555,8 @@ def matched_keywords(keywords: List[str], text: str) -> List[str]:
 
 
 def hard_signal_is_negated(text: str, evidence_type: str) -> bool:
+    if evidence_type in {"real deployment", "named customer/provider/payer"} and deployment_proof_is_negated(text):
+        return True
     return bool(matched_keywords(HARD_SIGNAL_NEGATION_RULES.get(evidence_type, []), text))
 
 
@@ -577,7 +579,14 @@ def hard_signal_evidence_types(text: str) -> List[str]:
             continue
         if hard_signal_is_negated(text, evidence_type):
             continue
-        if matched_keywords(keywords, text):
+        hits = matched_keywords(keywords, text)
+        if (
+            evidence_type == "workflow impact"
+            and deployment_proof_is_negated(text)
+            and set(hits) <= {"workflow automation"}
+        ):
+            continue
+        if hits:
             evidence.append(evidence_type)
     return evidence
 

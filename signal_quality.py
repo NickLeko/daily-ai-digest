@@ -27,6 +27,31 @@ MATERIALITY_TEXT_FIELDS = [
     "subcategory",
 ]
 
+NEGATED_DEPLOYMENT_PROOF_PHRASES = [
+    "announced only",
+    "previewed only",
+    "no deployment",
+    "no named deployment",
+    "did not name deployment",
+    "did not name a deployment",
+    "did not report deployment",
+    "did not report a deployment",
+    "has not deployed",
+    "not yet deployed",
+    "without deployment",
+    "without a deployment",
+    "lacks deployment",
+    "no named customer",
+    "did not name customer",
+    "did not name a customer",
+    "without named customer",
+    "without a named customer",
+    "lacks customer",
+    "no production rollout",
+    "without production rollout",
+    "without a production rollout",
+]
+
 
 def normalize_text(value: object) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", str(value or "").lower()))
@@ -44,6 +69,10 @@ def keyword_matches_text(keyword: str, text: str) -> bool:
 
 def matched_keywords(keywords: Iterable[str], text: str) -> List[str]:
     return [keyword for keyword in keywords if keyword_matches_text(keyword, text)]
+
+
+def deployment_proof_is_negated(text: str) -> bool:
+    return bool(matched_keywords(NEGATED_DEPLOYMENT_PROOF_PHRASES, text))
 
 
 def mapping_materiality_text(value: Dict[str, Any]) -> str:
@@ -74,10 +103,19 @@ def classify_operator_materiality(text: str, *, category: str = "") -> Dict[str,
     capability_hits = matched_keywords(CAPABILITY_MATERIAL_KEYWORDS, text)
     workflow_hits = matched_keywords(WORKFLOW_CONTEXT_KEYWORDS, text)
     generic_research_hits = matched_keywords(GENERIC_RESEARCH_CONTEXT_KEYWORDS, text)
+    deployment_proof_negated = deployment_proof_is_negated(text)
+    if deployment_proof_negated:
+        deployment_hits = []
+    if deployment_proof_negated and set(operator_impact_hits) <= {"workflow automation"}:
+        operator_impact_hits = []
 
     has_workflow_context = bool(workflow_hits)
     has_regulatory_materiality = bool(regulatory_hits)
-    has_deployment_materiality = bool(deployment_hits) and has_workflow_context
+    has_deployment_materiality = (
+        bool(deployment_hits)
+        and has_workflow_context
+        and not deployment_proof_negated
+    )
     has_operator_impact = bool(operator_impact_hits) and has_workflow_context
     has_capability_materiality = bool(capability_hits) and (
         has_workflow_context or has_regulatory_materiality

@@ -33,7 +33,7 @@ from operator_brief_selection import (
     story_surface_worthiness,
     story_surface_worthiness_reason,
 )
-from scoring import OBJECTIVE_DISPLAY_ORDER
+from scoring import OBJECTIVE_DISPLAY_ORDER, hard_signal_evidence_types
 from selection_policy import (
     NEAR_MISS_LIMIT,
     NEAR_MISS_MIN_OBJECTIVE_SCORE,
@@ -613,7 +613,12 @@ def normalize_item(
         "regulatory_materiality": str(item.get("regulatory_materiality", "none") or "none"),
         "hard_signal_evidence": [
             str(value)
-            for value in item.get("hard_signal_evidence", []) or []
+            for value in (
+                item.get("hard_signal_evidence")
+                if "hard_signal_evidence" in item
+                else hard_signal_evidence_types(item_text(item))
+            )
+            or []
             if str(value).strip()
         ],
         "is_generic_devtool": bool(item.get("is_generic_devtool")),

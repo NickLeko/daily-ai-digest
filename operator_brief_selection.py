@@ -115,7 +115,7 @@ def story_hard_signal_evidence(story: Dict[str, Any]) -> List[str]:
         for value in story.get("hard_signal_evidence", []) or []
         if str(value).strip()
     ]
-    if explicit:
+    if "hard_signal_evidence" in story:
         return explicit
 
     # Backward-compatible inference for older fixtures/artifacts.
