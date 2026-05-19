@@ -119,8 +119,6 @@ Includes:
 - Source + confidence on each story
 - One-sentence summary and why-it-matters lines
 
-![Example Output](./assets/example.png)
-
 ---
 
 ## How to run
